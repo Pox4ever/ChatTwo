@@ -83,8 +83,6 @@ internal class Configuration : IPluginConfiguration
     public bool EnableBetterTTVEmotes = true;
     public bool EnableSevenTVEmotes = true;
     public float EmoteSize = 1.0f; // Emote size multiplier (1.0 = normal size)
-    public string SevenTVChannelName = "Pox4eveR";
-    public string SevenTVUserId = "01FHRHVT5G0005Q2VTPSMHYST6";
     public string TwitchUsernames = ""; // Twitch usernames (comma-separated, e.g. "pox4ever,shroud") - will be automatically converted to user IDs
     public string TwitchUserIds = ""; // Twitch user IDs (comma-separated, e.g. "410517388,123456789") for loading personal 7TV emotes
     
@@ -186,8 +184,6 @@ internal class Configuration : IPluginConfiguration
         EnableBetterTTVEmotes = other.EnableBetterTTVEmotes;
         EnableSevenTVEmotes = other.EnableSevenTVEmotes;
         EmoteSize = other.EmoteSize;
-        SevenTVChannelName = other.SevenTVChannelName;
-        SevenTVUserId = other.SevenTVUserId;
         TwitchUsernames = other.TwitchUsernames;
         TwitchUserIds = other.TwitchUserIds;
         TwitchAccessToken = other.TwitchAccessToken;
