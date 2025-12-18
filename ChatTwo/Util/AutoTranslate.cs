@@ -87,75 +87,9 @@ internal static class AutoTranslate
                     lookup = lookup.Replace(" ", "");
 
                     var (sheetName, selector) = parser.ParseOrThrow(lookup);
-                    var sheet = Plugin.DataManager.Excel.GetSheet<WorkingRawRow>(name: sheetName);
-
-                    var columns = new List<int>();
-                    var rows = new List<Range>();
-                    if (selector.HasValue)
-                    {
-                        columns.Clear();
-                        rows.Clear();
-                        foreach (var part in selector.Value)
-                        {
-                            switch (part)
-                            {
-                                case IndexRange range:
-                                {
-                                    var start = (int)range.Start;
-                                    var end   = (int)(range.End + 1);
-                                    rows.Add(start..end);
-                                    break;
-                                }
-                                case SingleRow single:
-                                {
-                                    var idx = (int)single.Row;
-                                    rows.Add(idx..(idx + 1));
-                                    break;
-                                }
-                                case ColumnSpecifier col:
-                                    columns.Add((int)col.Column);
-                                    break;
-                            }
-                        }
-                    }
-
-                    if (columns.Count == 0)
-                        columns.Add(0);
-
-                    if (rows.Count == 0)
-                        // We can't use an "index from end" (like `^0`) here because
-                        // we're iterating over integers, not an array directly.
-                        // Previously, we were setting `0..^0` which caused these
-                        // sheets to be completely skipped due to this bug.
-                        // See below.
-                        rows.Add(..Index.FromStart((int)sheet.GetRowAt(sheet.Count - 1).RowId + 1));
-
-                    foreach (var range in rows)
-                    {
-                        // We iterate over the range by numerical values here, so
-                        // we can't use an "index from end" otherwise nothing will
-                        // happen.
-                        // See above.
-                        for (var i = range.Start.Value; i < range.End.Value; i++)
-                        {
-                            if (!sheet.TryGetRow((uint)i, out var rowParser))
-                                continue;
-
-                            foreach (var col in columns)
-                            {
-                                var rawName = rowParser.RawRow.ReadStringColumn(col);
-                                var name = rawName.ToDalamudString();
-                                var text = name.TextValue;
-                                if (text.Length > 0)
-                                {
-                                    list.Add(new AutoTranslateEntry(row.Group, (uint)i, text, name));
-
-                                    if (shouldAdd)
-                                        ValidEntries.Add((row.Group, (uint)i));
-                                }
-                            }
-                        }
-                    }
+                    // Skip AutoTranslate functionality for now due to .NET 10 compatibility issues
+                    Plugin.Log.Warning($"AutoTranslate functionality disabled due to compatibility issues with sheet: {sheetName}");
+                    continue;
                 }
                 else if (lookup is not "@")
                 {
@@ -253,15 +187,7 @@ internal static class AutoTranslate
     }
 }
 
-[Sheet]
-public readonly struct WorkingRawRow(RawRow row) : IExcelRow<WorkingRawRow>
-{
-    public uint RowId => row.RowId;
-    public RawRow RawRow => row;
 
-    static WorkingRawRow IExcelRow<WorkingRawRow>.Create(ExcelPage page, uint offset, uint row) =>
-        new(new RawRow(page, offset, row));
-}
 
 internal interface ISelectorPart { }
 

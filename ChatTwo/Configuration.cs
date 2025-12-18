@@ -80,6 +80,19 @@ internal class Configuration : IPluginConfiguration
     public bool Use24HourClock;
 
     public bool ShowEmotes = true;
+    public bool EnableBetterTTVEmotes = true;
+    public bool EnableSevenTVEmotes = true;
+    public float EmoteSize = 1.0f; // Emote size multiplier (1.0 = normal size)
+    public string SevenTVChannelName = "Pox4eveR";
+    public string SevenTVUserId = "01FHRHVT5G0005Q2VTPSMHYST6";
+    public string TwitchUsernames = ""; // Twitch usernames (comma-separated, e.g. "pox4ever,shroud") - will be automatically converted to user IDs
+    public string TwitchUserIds = ""; // Twitch user IDs (comma-separated, e.g. "410517388,123456789") for loading personal 7TV emotes
+    
+    // Twitch OAuth integration
+    public string TwitchAccessToken = ""; // OAuth access token for Twitch API
+    public string TwitchUsername = ""; // Authenticated user's Twitch username
+    public string TwitchUserId = ""; // Authenticated user's Twitch user ID
+    public DateTime TwitchTokenExpiry = DateTime.MinValue; // When the token expires
     public HashSet<string> BlockedEmotes = [];
 
     public bool FontsEnabled = true;
@@ -170,6 +183,17 @@ internal class Configuration : IPluginConfiguration
         MaxLinesToRender = other.MaxLinesToRender;
         Use24HourClock = other.Use24HourClock;
         ShowEmotes = other.ShowEmotes;
+        EnableBetterTTVEmotes = other.EnableBetterTTVEmotes;
+        EnableSevenTVEmotes = other.EnableSevenTVEmotes;
+        EmoteSize = other.EmoteSize;
+        SevenTVChannelName = other.SevenTVChannelName;
+        SevenTVUserId = other.SevenTVUserId;
+        TwitchUsernames = other.TwitchUsernames;
+        TwitchUserIds = other.TwitchUserIds;
+        TwitchAccessToken = other.TwitchAccessToken;
+        TwitchUsername = other.TwitchUsername;
+        TwitchUserId = other.TwitchUserId;
+        TwitchTokenExpiry = other.TwitchTokenExpiry;
         BlockedEmotes = other.BlockedEmotes;
         FontsEnabled = other.FontsEnabled;
         ItalicEnabled = other.ItalicEnabled;

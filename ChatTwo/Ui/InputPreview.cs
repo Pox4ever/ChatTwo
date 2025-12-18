@@ -189,7 +189,7 @@ public partial class InputPreview : Window
         if (chunk.Link is EmotePayload emotePayload && Plugin.Config.ShowEmotes)
         {
             var emoteSize = ImGui.CalcTextSize("W");
-            emoteSize = emoteSize with { Y = emoteSize.X } * 1.5f;
+            emoteSize = emoteSize with { Y = emoteSize.X } * 1.5f * Plugin.Config.EmoteSize;
 
             // TextWrap doesn't work for emotes, so we have to wrap them manually
             if (ImGui.GetContentRegionAvail().X < emoteSize.X)
