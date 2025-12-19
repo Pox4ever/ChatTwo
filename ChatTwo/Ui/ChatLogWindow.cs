@@ -1503,7 +1503,20 @@ public sealed class ChatLogWindow : Window
 
                 var before = Chat[..AutoCompleteInfo.StartPos];
                 var after = Chat[AutoCompleteInfo.EndPos..];
-                var replacement = $"<at:{entry.Group},{entry.Row}>";
+                
+                // Check if this is an emote (Group and Row are 0 for emotes)
+                string replacement;
+                if (entry.Group == 0 && entry.Row == 0)
+                {
+                    // This is an emote - just insert the emote name directly
+                    replacement = entry.String;
+                }
+                else
+                {
+                    // This is a regular auto-translate entry
+                    replacement = $"<at:{entry.Group},{entry.Row}>";
+                }
+                
                 Chat = $"{before}{replacement}{after}";
                 ImGui.CloseCurrentPopup();
                 Activate = true;

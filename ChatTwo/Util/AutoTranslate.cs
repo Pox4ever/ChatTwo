@@ -115,6 +115,8 @@ internal static class AutoTranslate
         var wholeMatches = new List<AutoTranslateEntry>();
         var prefixMatches = new List<AutoTranslateEntry>();
         var otherMatches = new List<AutoTranslateEntry>();
+        
+        // Add auto-translate entries
         foreach (var entry in AllEntries())
         {
             if (entry.String.Equals(prefix, StringComparison.OrdinalIgnoreCase))
@@ -123,6 +125,23 @@ internal static class AutoTranslate
                 prefixMatches.Add(entry);
             else if (entry.String.Contains(prefix, StringComparison.OrdinalIgnoreCase))
                 otherMatches.Add(entry);
+        }
+        
+        // Add emote entries
+        if (EmoteCache.State == EmoteCache.LoadingState.Done)
+        {
+            foreach (var emoteName in EmoteCache.SortedCodeArray)
+            {
+                // Create a fake auto-translate entry for emotes
+                var emoteEntry = new AutoTranslateEntry(0, 0, emoteName, new Dalamud.Game.Text.SeStringHandling.SeString());
+                
+                if (emoteName.Equals(prefix, StringComparison.OrdinalIgnoreCase))
+                    wholeMatches.Add(emoteEntry);
+                else if (emoteName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    prefixMatches.Add(emoteEntry);
+                else if (emoteName.Contains(prefix, StringComparison.OrdinalIgnoreCase))
+                    otherMatches.Add(emoteEntry);
+            }
         }
 
         if (sort)
