@@ -1486,7 +1486,45 @@ public sealed class ChatLogWindow : Window
                 var entry = AutoCompleteList[i];
 
                 var highlight = AutoCompleteSelection == i;
-                var clicked = ImGui.Selectable($"{entry.String}##{entry.Group}/{entry.Row}", highlight) || selected == i;
+                
+                // Check if this is an emote entry (Group=0, Row=0)
+                var isEmote = entry.Group == 0 && entry.Row == 0;
+                
+                var clicked = false;
+                
+                if (isEmote)
+                {
+                    // Draw emote with image
+                    var emoteImage = EmoteCache.GetEmote(entry.String);
+                    if (emoteImage != null)
+                    {
+                        // Create a selectable area that covers the whole row
+                        clicked = ImGui.Selectable($"##emote-{i}", highlight, ImGuiSelectableFlags.SpanAllColumns) || selected == i;
+                        
+                        // Draw the emote image and text on top of the selectable
+                        var cursor = ImGui.GetCursorPos();
+                        ImGui.SetCursorPos(cursor - new Vector2(0, ImGui.GetTextLineHeightWithSpacing()));
+                        
+                        var emoteSize = new Vector2(18, 18) * ImGuiHelpers.GlobalScale; // Small size for autocomplete
+                        emoteImage.Draw(emoteSize);
+                        
+                        ImGui.SameLine();
+                        ImGui.SetCursorPosY(cursor.Y - ImGui.GetTextLineHeightWithSpacing() + (emoteSize.Y - ImGui.GetTextLineHeight()) / 2);
+                        ImGui.TextUnformatted(entry.String);
+                    }
+                    else
+                    {
+                        // Fallback if emote image not available
+                        clicked = ImGui.Selectable($"{entry.String} (emote)##{entry.Group}/{entry.Row}", highlight) || selected == i;
+                    }
+                }
+                else
+                {
+                    // Regular auto-translate entry
+                    clicked = ImGui.Selectable($"{entry.String}##{entry.Group}/{entry.Row}", highlight) || selected == i;
+                }
+                
+                // Show keyboard shortcut for first 10 items
                 if (i < 10)
                 {
                     var button = (i + 1) % 10;
@@ -1501,12 +1539,12 @@ public sealed class ChatLogWindow : Window
                 if (!clicked)
                     continue;
 
+                // Handle selection
                 var before = Chat[..AutoCompleteInfo.StartPos];
                 var after = Chat[AutoCompleteInfo.EndPos..];
                 
-                // Check if this is an emote (Group and Row are 0 for emotes)
                 string replacement;
-                if (entry.Group == 0 && entry.Row == 0)
+                if (isEmote)
                 {
                     // This is an emote - just insert the emote name directly
                     replacement = entry.String;

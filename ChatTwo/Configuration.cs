@@ -80,6 +80,9 @@ internal class Configuration : IPluginConfiguration
     public bool Use24HourClock;
 
     public bool ShowEmotes = true;
+    public HashSet<string> BlockedEmotes = [];
+    
+    // (Pox4eveR) Custom emote features
     public bool EnableBetterTTVEmotes = true;
     public bool EnableSevenTVEmotes = true;
     public float EmoteSize = 1.0f; // Emote size multiplier (1.0 = normal size)
@@ -87,11 +90,10 @@ internal class Configuration : IPluginConfiguration
     public string TwitchUserIds = ""; // Twitch user IDs (comma-separated, e.g. "410517388,123456789") for loading personal 7TV emotes
     
     // Twitch OAuth integration
-    public string TwitchAccessToken = ""; // OAuth access token for Twitch API
-    public string TwitchUsername = ""; // Authenticated user's Twitch username
-    public string TwitchUserId = ""; // Authenticated user's Twitch user ID
-    public DateTime TwitchTokenExpiry = DateTime.MinValue; // When the token expires
-    public HashSet<string> BlockedEmotes = [];
+    public string TwitchAccessToken = "";
+    public string TwitchUsername = "";
+    public string TwitchUserId = "";
+    public DateTime TwitchTokenExpiry = DateTime.MinValue;
 
     public bool FontsEnabled = true;
     public ExtraGlyphRanges ExtraGlyphRanges = 0;
@@ -181,16 +183,22 @@ internal class Configuration : IPluginConfiguration
         MaxLinesToRender = other.MaxLinesToRender;
         Use24HourClock = other.Use24HourClock;
         ShowEmotes = other.ShowEmotes;
-        EnableBetterTTVEmotes = other.EnableBetterTTVEmotes;
-        EnableSevenTVEmotes = other.EnableSevenTVEmotes;
-        EmoteSize = other.EmoteSize;
-        TwitchUsernames = other.TwitchUsernames;
-        TwitchUserIds = other.TwitchUserIds;
-        TwitchAccessToken = other.TwitchAccessToken;
-        TwitchUsername = other.TwitchUsername;
-        TwitchUserId = other.TwitchUserId;
-        TwitchTokenExpiry = other.TwitchTokenExpiry;
         BlockedEmotes = other.BlockedEmotes;
+        
+        // (Pox4eveR) Custom emote features
+        if (other is Configuration otherConfig)
+        {
+            EnableBetterTTVEmotes = otherConfig.EnableBetterTTVEmotes;
+            EnableSevenTVEmotes = otherConfig.EnableSevenTVEmotes;
+            EmoteSize = otherConfig.EmoteSize;
+            TwitchUsernames = otherConfig.TwitchUsernames;
+            TwitchUserIds = otherConfig.TwitchUserIds;
+            TwitchAccessToken = otherConfig.TwitchAccessToken;
+            TwitchUsername = otherConfig.TwitchUsername;
+            TwitchUserId = otherConfig.TwitchUserId;
+            TwitchTokenExpiry = otherConfig.TwitchTokenExpiry;
+        }
+        
         FontsEnabled = other.FontsEnabled;
         ItalicEnabled = other.ItalicEnabled;
         ExtraGlyphRanges = other.ExtraGlyphRanges;
