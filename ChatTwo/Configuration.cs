@@ -124,6 +124,28 @@ internal class Configuration : IPluginConfiguration
 
     public bool OverrideStyle;
     public string? ChosenStyle;
+    
+    // Modern UI Settings
+    public bool ModernUIEnabled = true;
+    public float UIRounding = 6.0f;
+    public float UIBorderSize = 1.0f;
+    public bool UseModernColors = true;
+    public float ShadowStrength = 0.3f;
+    
+    // Enhanced Input Area Settings
+    public bool ShowFloatingChannelIndicator = true;
+    public bool ShowTypingIndicator = true;
+    public bool EnhancedInputFeedback = true;
+    
+    // Better Tab System Settings
+    public bool ShowTabIcons = true;
+    public bool EnableTabDragReorder = true;
+    public bool SmoothTabTransitions = true;
+    
+    // Enhanced Emote Integration Settings
+    public bool ShowInlineEmotePreviews = true;
+    public bool EnableEmotePickerPopup = true;
+    public bool EmotePickerSearchEnabled = true;
 
     public ConfigKeyBind? ChatTabForward;
     public ConfigKeyBind? ChatTabBackward;
@@ -213,6 +235,29 @@ internal class Configuration : IPluginConfiguration
         Tabs = other.Tabs.Select(t => t.Clone()).ToList();
         OverrideStyle = other.OverrideStyle;
         ChosenStyle = other.ChosenStyle;
+        
+        // Modern UI Settings
+        ModernUIEnabled = other.ModernUIEnabled;
+        UIRounding = other.UIRounding;
+        UIBorderSize = other.UIBorderSize;
+        UseModernColors = other.UseModernColors;
+        ShadowStrength = other.ShadowStrength;
+        
+        // Enhanced Input Area Settings
+        ShowFloatingChannelIndicator = other.ShowFloatingChannelIndicator;
+        ShowTypingIndicator = other.ShowTypingIndicator;
+        EnhancedInputFeedback = other.EnhancedInputFeedback;
+        
+        // Better Tab System Settings
+        ShowTabIcons = other.ShowTabIcons;
+        EnableTabDragReorder = other.EnableTabDragReorder;
+        SmoothTabTransitions = other.SmoothTabTransitions;
+        
+        // Enhanced Emote Integration Settings
+        ShowInlineEmotePreviews = other.ShowInlineEmotePreviews;
+        EnableEmotePickerPopup = other.EnableEmotePickerPopup;
+        EmotePickerSearchEnabled = other.EmotePickerSearchEnabled;
+        
         ChatTabForward = other.ChatTabForward;
         ChatTabBackward = other.ChatTabBackward;
         WebinterfaceEnabled = other.WebinterfaceEnabled;

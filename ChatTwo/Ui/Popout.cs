@@ -1,5 +1,12 @@
 ﻿using System.Numerics;
+using ChatTwo.Code;
+using ChatTwo.GameFunctions;
+using ChatTwo.GameFunctions.Types;
+using ChatTwo.Resources;
+using ChatTwo.Util;
+using Dalamud.Interface;
 using Dalamud.Interface.Style;
+using Dalamud.Interface.Utility;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using Dalamud.Bindings.ImGui;
@@ -14,6 +21,10 @@ internal class Popout : Window
 
     private long FrameTime; // set every frame
     private long LastActivityTime = Environment.TickCount64;
+    
+    // Input state for popout
+    private string PopoutChat = string.Empty;
+    private bool PopoutInputFocused;
 
     public Popout(ChatLogWindow chatLogWindow, Tab tab, int idx) : base($"{tab.Name}##popout")
     {
@@ -58,6 +69,9 @@ internal class Popout : Window
         if (Plugin.Config is { OverrideStyle: true, ChosenStyle: not null })
             StyleModel.GetConfiguredStyles()?.FirstOrDefault(style => style.Name == Plugin.Config.ChosenStyle)?.Push();
 
+        // Apply modern styling to popout windows
+        ModernUI.BeginModernStyle(Plugin.Config);
+
         Flags = ImGuiWindowFlags.None;
         if (!Plugin.Config.ShowPopOutTitleBar)
             Flags |= ImGuiWindowFlags.NoTitleBar;
@@ -85,16 +99,172 @@ internal class Popout : Window
             ImGui.Separator();
         }
 
+        // Calculate space for input area (including typing indicator space)
+        var inputHeight = ImGui.GetFrameHeight() + ImGui.GetStyle().ItemSpacing.Y * 2 + 16; // Extra space for typing indicator
+        var messageLogHeight = ImGui.GetContentRegionAvail().Y - inputHeight;
+
         var handler = ChatLogWindow.HandlerLender.Borrow();
-        ChatLogWindow.DrawMessageLog(Tab, handler, ImGui.GetContentRegionAvail().Y, false);
+        ChatLogWindow.DrawMessageLog(Tab, handler, messageLogHeight, false);
+
+        // Draw input area
+        DrawPopoutInputArea();
 
         if (ImGui.IsWindowHovered(ImGuiHoveredFlags.ChildWindows))
             LastActivityTime = FrameTime;
+    }
+    
+    private void DrawPopoutInputArea()
+    {
+        ImGui.Separator();
+        
+        // Channel selector button (back to simple icon)
+        var beforeIcon = ImGui.GetCursorPos();
+        using (ModernUI.PushModernButtonStyle(Plugin.Config))
+        {
+            if (ImGuiUtil.IconButton(FontAwesomeIcon.Comment) && Tab.Channel is null)
+                ImGui.OpenPopup("PopoutChannelPicker");
+        }
+
+        if (Tab.Channel is not null && ImGui.IsItemHovered())
+            ModernUI.DrawModernTooltip(Language.ChatLog_SwitcherDisabled, Plugin.Config);
+
+        using (var popup = ImRaii.Popup("PopoutChannelPicker"))
+        {
+            if (popup)
+            {
+                var channels = ChatLogWindow.GetValidChannels();
+                foreach (var (name, channel) in channels)
+                    if (ImGui.Selectable(name))
+                        ChatLogWindow.SetChannel(channel);
+            }
+        }
+
+        ImGui.SameLine();
+        var afterIcon = ImGui.GetCursorPos();
+        var buttonWidth = afterIcon.X - beforeIcon.X;
+        var inputWidth = ImGui.GetContentRegionAvail().X;
+
+        // Input field
+        var inputType = Tab.CurrentChannel.UseTempChannel ? Tab.CurrentChannel.TempChannel.ToChatType() : Tab.CurrentChannel.Channel.ToChatType();
+        var isCommand = PopoutChat.Trim().StartsWith('/');
+        if (isCommand)
+        {
+            var command = PopoutChat.Split(' ')[0];
+            if (ChatLogWindow.TextCommandChannels.TryGetValue(command, out var channel))
+                inputType = channel;
+
+            if (!ChatLogWindow.IsValidCommand(command))
+                inputType = ChatType.Error;
+        }
+
+        var normalColor = ImGui.GetColorU32(ImGuiCol.Text);
+        var inputColour = Plugin.Config.ChatColours.TryGetValue(inputType, out var inputCol) ? inputCol : inputType.DefaultColor();
+
+        if (!isCommand && ChatLogWindow.Plugin.ExtraChat.ChannelOverride is var (_, overrideColour))
+            inputColour = overrideColour;
+
+        if (isCommand && ChatLogWindow.Plugin.ExtraChat.ChannelCommandColours.TryGetValue(PopoutChat.Split(' ')[0], out var ecColour))
+            inputColour = ecColour;
+
+        var push = inputColour != null;
+        using (ImRaii.PushColor(ImGuiCol.Text, push ? ColourUtil.RgbaToAbgr(inputColour!.Value) : 0, push))
+        {
+            var isChatEnabled = Tab is { InputDisabled: false };
+            
+            var chatCopy = PopoutChat;
+            using (ImRaii.Disabled(!isChatEnabled))
+            {
+                var flags = ImGuiInputTextFlags.EnterReturnsTrue | (!isChatEnabled ? ImGuiInputTextFlags.ReadOnly : ImGuiInputTextFlags.None);
+                ImGui.SetNextItemWidth(inputWidth);
+                
+                // Enhanced input field with better visual feedback
+                var hasError = isCommand && !ChatLogWindow.IsValidCommand(PopoutChat.Split(' ')[0]);
+                var (styleScope, colorScope) = ModernUI.PushEnhancedInputStyle(Plugin.Config, PopoutInputFocused, hasError);
+                using (styleScope)
+                using (colorScope)
+                {
+                    var placeholder = isChatEnabled ? "Type your message..." : Language.ChatLog_DisabledInput;
+                    if (ImGui.InputTextWithHint("##popout-chat-input", placeholder, ref PopoutChat, 500, flags))
+                    {
+                        // Send message on Enter
+                        if (!string.IsNullOrWhiteSpace(PopoutChat))
+                        {
+                            SendPopoutMessage();
+                        }
+                    }
+                }
+            }
+            
+            var inputActive = ImGui.IsItemActive();
+            PopoutInputFocused = isChatEnabled && inputActive;
+
+            // Draw typing indicator with proper positioning to avoid cutoff
+            if (isChatEnabled && !string.IsNullOrEmpty(PopoutChat))
+            {
+                // Reserve space for typing indicator to prevent cutoff
+                var typingHeight = 12.0f; // Height needed for typing dots
+                var currentPos = ImGui.GetCursorPos();
+                ImGui.SetCursorPos(currentPos + new Vector2(8, 4)); // Offset from left edge
+                ModernUI.DrawTypingIndicator(true, Plugin.Config);
+                ImGui.SetCursorPos(currentPos + new Vector2(0, typingHeight)); // Move cursor down to reserve space
+            }
+
+            if (ImGui.IsItemDeactivated())
+            {
+                if (ImGui.IsKeyDown(ImGuiKey.Escape))
+                {
+                    PopoutChat = chatCopy;
+
+                    if (Tab.CurrentChannel.UseTempChannel)
+                    {
+                        Tab.CurrentChannel.ResetTempChannel();
+                        ChatLogWindow.SetChannel(Tab.CurrentChannel.Channel);
+                    }
+                }
+            }
+
+            // Process keybinds that have modifiers while the chat is focused.
+            if (inputActive)
+            {
+                ChatLogWindow.Plugin.Functions.KeybindManager.HandleKeybinds(KeyboardSource.ImGui, true, true);
+                LastActivityTime = FrameTime;
+            }
+
+            // Reset temp channel when unfocused
+            if (!inputActive && Tab.CurrentChannel.UseTempChannel)
+            {
+                Tab.CurrentChannel.ResetTempChannel();
+                ChatLogWindow.SetChannel(Tab.CurrentChannel.Channel);
+            }
+        }
+    }
+    
+    private void SendPopoutMessage()
+    {
+        if (string.IsNullOrWhiteSpace(PopoutChat))
+            return;
+            
+        // Use the main chat window's send functionality
+        var originalChat = ChatLogWindow.Chat;
+        ChatLogWindow.Chat = PopoutChat;
+        
+        try
+        {
+            ChatLogWindow.SendChatBox(Tab);
+            PopoutChat = string.Empty; // Clear input after sending
+        }
+        finally
+        {
+            ChatLogWindow.Chat = originalChat; // Restore original chat
+        }
     }
 
     public override void PostDraw()
     {
         ChatLogWindow.PopOutDocked[Idx] = ImGui.IsWindowDocked();
+
+        // End modern styling
+        ModernUI.EndModernStyle();
 
         if (Plugin.Config is { OverrideStyle: true, ChosenStyle: not null })
             StyleModel.GetConfiguredStyles()?.FirstOrDefault(style => style.Name == Plugin.Config.ChosenStyle)?.Pop();

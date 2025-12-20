@@ -67,7 +67,7 @@ public sealed class ChatLogWindow : Window
 
     public PayloadHandler PayloadHandler { get; }
     internal Lender<PayloadHandler> HandlerLender { get; }
-    private Dictionary<string, ChatType> TextCommandChannels { get; } = new();
+    internal Dictionary<string, ChatType> TextCommandChannels { get; } = new();
     private HashSet<string> AllCommands { get; } = [];
 
     private const uint ChatOpenSfx = 35u;
@@ -236,7 +236,7 @@ public sealed class ChatLogWindow : Window
             Chat = info.Text;
     }
 
-    private bool IsValidCommand(string command)
+    internal bool IsValidCommand(string command)
     {
         return Plugin.CommandManager.Commands.ContainsKey(command) || AllCommands.Contains(command);
     }
@@ -488,8 +488,12 @@ public sealed class ChatLogWindow : Window
         if (Plugin.Config.KeepInputFocus && Activate)
             ImGui.SetWindowFocus(WindowName);
 
+        // Apply existing style first
         if (Plugin.Config is { OverrideStyle: true, ChosenStyle: not null })
             StyleModel.GetConfiguredStyles()?.FirstOrDefault(style => style.Name == Plugin.Config.ChosenStyle)?.Push();
+            
+        // Apply modern styling using ImRaii for proper scoping
+        ModernUI.BeginModernStyle(Plugin.Config);
     }
 
     public override void PostDraw()
@@ -500,6 +504,9 @@ public sealed class ChatLogWindow : Window
         // doesn't get called if the input is disabled.
         if (Plugin.CurrentTab.InputDisabled)
             Activate = false;
+
+        // End modern styling
+        ModernUI.EndModernStyle();
 
         if (Plugin.Config is { OverrideStyle: true, ChosenStyle: not null })
             StyleModel.GetConfiguredStyles()?.FirstOrDefault(style => style.Name == Plugin.Config.ChosenStyle)?.Pop();
@@ -569,11 +576,14 @@ public sealed class ChatLogWindow : Window
         }
 
         var beforeIcon = ImGui.GetCursorPos();
-        if (ImGuiUtil.IconButton(FontAwesomeIcon.Comment) && activeTab.Channel is null)
-            ImGui.OpenPopup(ChatChannelPicker);
+        using (ModernUI.PushModernButtonStyle(Plugin.Config))
+        {
+            if (ImGuiUtil.IconButton(FontAwesomeIcon.Comment) && activeTab.Channel is null)
+                ImGui.OpenPopup(ChatChannelPicker);
+        }
 
         if (activeTab.Channel is not null && ImGui.IsItemHovered())
-            ImGuiUtil.Tooltip(Language.ChatLog_SwitcherDisabled);
+            ModernUI.DrawModernTooltip(Language.ChatLog_SwitcherDisabled, Plugin.Config);
 
         using (var popup = ImRaii.Popup(ChatChannelPicker))
         {
@@ -630,10 +640,29 @@ public sealed class ChatLogWindow : Window
             {
                 var flags = InputFlags | (!isChatEnabled ? ImGuiInputTextFlags.ReadOnly : ImGuiInputTextFlags.None);
                 ImGui.SetNextItemWidth(inputWidth);
-                ImGui.InputTextWithHint("##chat2-input", isChatEnabled ? "": Language.ChatLog_DisabledInput, ref Chat, 500, flags, Callback);
+                
+                // Enhanced input field with better visual feedback
+                var hasError = isCommand && !IsValidCommand(Chat.Split(' ')[0]);
+                var (styleScope, colorScope) = ModernUI.PushEnhancedInputStyle(Plugin.Config, InputFocused, hasError);
+                using (styleScope)
+                using (colorScope)
+                {
+                    var placeholder = isChatEnabled ? "Type your message..." : Language.ChatLog_DisabledInput;
+                    ImGui.InputTextWithHint("##chat2-input", placeholder, ref Chat, 500, flags, Callback);
+                }
             }
             var inputActive = ImGui.IsItemActive();
             InputFocused = isChatEnabled && inputActive;
+
+            // Draw typing indicator with proper positioning to avoid cutoff
+            if (isChatEnabled && !string.IsNullOrEmpty(Chat))
+            {
+                // Position typing indicator below the input field with proper spacing
+                var currentPos = ImGui.GetCursorPos();
+                ImGui.SetCursorPos(currentPos + new Vector2(8, 2)); // Offset from left edge, small gap
+                ModernUI.DrawTypingIndicator(true, Plugin.Config);
+                ImGui.SetCursorPos(currentPos); // Reset cursor position
+            }
 
             var tooltipDraw = Plugin.Config.PreviewPosition is PreviewPosition.Tooltip && Plugin.InputPreview.IsDrawable;
             if (tooltipDraw && ImGui.IsItemHovered())
@@ -706,14 +735,20 @@ public sealed class ChatLogWindow : Window
 
         ImGui.SameLine();
 
-        if (ImGuiUtil.IconButton(FontAwesomeIcon.Cog, width: (int)buttonWidth))
-            Plugin.SettingsWindow.Toggle();
+        using (ModernUI.PushModernButtonStyle(Plugin.Config))
+        {
+            if (ImGuiUtil.IconButton(FontAwesomeIcon.Cog, width: (int)buttonWidth))
+                Plugin.SettingsWindow.Toggle();
+        }
 
         if (Plugin.Config.ShowHideButton)
         {
             ImGui.SameLine();
-            if (ImGuiUtil.IconButton(FontAwesomeIcon.EyeSlash, width: (int)buttonWidth))
-                UserHide();
+            using (ModernUI.PushModernButtonStyle(Plugin.Config))
+            {
+                if (ImGuiUtil.IconButton(FontAwesomeIcon.EyeSlash, width: (int)buttonWidth))
+                    UserHide();
+            }
         }
 
         if (ImGui.IsWindowHovered(ImGuiHoveredFlags.ChildWindows))
@@ -724,8 +759,11 @@ public sealed class ChatLogWindow : Window
 
         ImGui.SameLine();
 
-        if (ImGuiUtil.IconButton(FontAwesomeIcon.Leaf))
-            GameFunctions.GameFunctions.ClickNoviceNetworkButton();
+        using (ModernUI.PushModernButtonStyle(Plugin.Config))
+        {
+            if (ImGuiUtil.IconButton(FontAwesomeIcon.Leaf))
+                GameFunctions.GameFunctions.ClickNoviceNetworkButton();
+        }
     }
 
     internal Dictionary<string, InputChannel> GetValidChannels()
@@ -1233,39 +1271,75 @@ public sealed class ChatLogWindow : Window
 
     private void DrawTabBar()
     {
-        using var tabBar = ImRaii.TabBar("##chat2-tabs");
-        if (!tabBar.Success)
-            return;
-
-        var previousTab = Plugin.CurrentTab;
-        for (var tabI = 0; tabI < Plugin.Config.Tabs.Count; tabI++)
+        using (ModernUI.PushModernTabStyle(Plugin.Config))
+        using (var tabBar = ImRaii.TabBar("##chat2-tabs"))
         {
-            var tab = Plugin.Config.Tabs[tabI];
-            if (tab.PopOut)
-                continue;
+            if (!tabBar.Success)
+                return;
 
-            var unread = tabI == Plugin.LastTab || tab.UnreadMode == UnreadMode.None || tab.Unread == 0 ? "" : $" ({tab.Unread})";
-            var flags = ImGuiTabItemFlags.None;
-            if (Plugin.WantedTab == tabI)
-                flags |= ImGuiTabItemFlags.SetSelected;
+            var previousTab = Plugin.CurrentTab;
+            
+            for (var tabI = 0; tabI < Plugin.Config.Tabs.Count; tabI++)
+            {
+                var tab = Plugin.Config.Tabs[tabI];
+                if (tab.PopOut)
+                    continue;
 
-            using var tabItem = ImRaii.TabItem($"{tab.Name}{unread}###log-tab-{tabI}", flags);
-            DrawTabContextMenu(tab, tabI);
+                // Modern unread indicator with badge styling
+                var unread = tabI == Plugin.LastTab || tab.UnreadMode == UnreadMode.None || tab.Unread == 0 
+                    ? "" 
+                    : Plugin.Config.ModernUIEnabled 
+                        ? $" •{tab.Unread}" 
+                        : $" ({tab.Unread})";
+                        
+                var flags = ImGuiTabItemFlags.None;
+                if (Plugin.WantedTab == tabI)
+                    flags |= ImGuiTabItemFlags.SetSelected;
 
-            if (!tabItem.Success)
-                continue;
+                // Apply smooth transition effects
+                var isActive = Plugin.LastTab == tabI;
+                if (Plugin.Config.ModernUIEnabled && Plugin.Config.SmoothTabTransitions && !isActive)
+                {
+                    var time = (float)ImGui.GetTime();
+                    var alpha = 0.7f + 0.1f * (float)Math.Sin(time * 1.5f + tabI * 0.5f);
+                    using var color = ImRaii.PushColor(ImGuiCol.Text, ImGui.GetColorU32(ImGuiCol.Text) & 0x00FFFFFF | ((uint)(alpha * 255) << 24));
+                }
 
-            var hasTabSwitched = Plugin.LastTab != tabI;
-            Plugin.LastTab = tabI;
+                // Create tab label with optional icon
+                var tabLabel = tab.Name + unread;
+                if (Plugin.Config.ModernUIEnabled && Plugin.Config.ShowTabIcons)
+                {
+                    var icon = ModernUI.GetTabIcon(tab);
+                    tabLabel = $"{icon.ToIconString()} {tab.Name}{unread}";
+                }
 
-            if (hasTabSwitched)
-                TabSwitched(tab, previousTab);
+                using var tabItem = ImRaii.TabItem($"{tabLabel}###log-tab-{tabI}", flags);
+                
+                // Handle drag and drop reordering
+                if (ModernUI.HandleTabDragDrop(tabI, Plugin.Config.Tabs, Plugin.Config))
+                    Plugin.SaveConfig();
+                
+                // Check for popout during each tab's drag operation
+                if (ModernUI.CheckDragToPopout(Plugin.Config.Tabs, Plugin.Config))
+                    Plugin.SaveConfig();
+                
+                DrawTabContextMenu(tab, tabI);
 
-            tab.Unread = 0;
-            DrawMessageLog(tab, PayloadHandler, GetRemainingHeightForMessageLog(), hasTabSwitched);
+                if (!tabItem.Success)
+                    continue;
+
+                var hasTabSwitched = Plugin.LastTab != tabI;
+                Plugin.LastTab = tabI;
+
+                if (hasTabSwitched)
+                    TabSwitched(tab, previousTab);
+
+                tab.Unread = 0;
+                DrawMessageLog(tab, PayloadHandler, GetRemainingHeightForMessageLog(), hasTabSwitched);
+            }
+
+            Plugin.WantedTab = null;
         }
-
-        Plugin.WantedTab = null;
     }
 
     private void DrawTabSidebar()
@@ -1287,6 +1361,7 @@ public sealed class ChatLogWindow : Window
             if (child)
             {
                 var previousTab = Plugin.CurrentTab;
+                
                 for (var tabI = 0; tabI < Plugin.Config.Tabs.Count; tabI++)
                 {
                     var tab = Plugin.Config.Tabs[tabI];
@@ -1294,7 +1369,25 @@ public sealed class ChatLogWindow : Window
                         continue;
 
                     var unread = tabI == Plugin.LastTab || tab.UnreadMode == UnreadMode.None || tab.Unread == 0 ? "" : $" ({tab.Unread})";
-                    var clicked = ImGui.Selectable($"{tab.Name}{unread}###log-tab-{tabI}", Plugin.LastTab == tabI || Plugin.WantedTab == tabI);
+                    
+                    // Create tab label with optional icon for sidebar
+                    var tabLabel = tab.Name + unread;
+                    if (Plugin.Config.ModernUIEnabled && Plugin.Config.ShowTabIcons)
+                    {
+                        var icon = ModernUI.GetTabIcon(tab);
+                        tabLabel = $"{icon.ToIconString()} {tab.Name}{unread}";
+                    }
+                    
+                    var clicked = ImGui.Selectable($"{tabLabel}###log-tab-{tabI}", Plugin.LastTab == tabI || Plugin.WantedTab == tabI);
+                    
+                    // Handle drag and drop reordering for sidebar
+                    if (ModernUI.HandleTabDragDrop(tabI, Plugin.Config.Tabs, Plugin.Config))
+                        Plugin.SaveConfig();
+                    
+                    // Check for popout during each tab's drag operation
+                    if (ModernUI.CheckDragToPopout(Plugin.Config.Tabs, Plugin.Config))
+                        Plugin.SaveConfig();
+                    
                     DrawTabContextMenu(tab, tabI);
 
                     if (!clicked && Plugin.WantedTab != tabI)
@@ -1306,6 +1399,10 @@ public sealed class ChatLogWindow : Window
                     if (hasTabSwitched)
                         TabSwitched(tab, previousTab);
                 }
+                
+                // Check for drag-to-popout in sidebar
+                if (ModernUI.CheckDragToPopout(Plugin.Config.Tabs, Plugin.Config))
+                    Plugin.SaveConfig();
             }
         }
 
@@ -1419,7 +1516,17 @@ public sealed class ChatLogWindow : Window
             AutoCompleteOpen = false;
         }
 
-        ImGui.SetNextWindowSize(new Vector2(400, 300) * ImGuiHelpers.GlobalScale);
+        // Modern autocomplete popup with better sizing and styling
+        var popupSize = new Vector2(450, 350) * ImGuiHelpers.GlobalScale;
+        ImGui.SetNextWindowSize(popupSize);
+        
+        if (Plugin.Config.ModernUIEnabled)
+        {
+            ImGui.SetNextWindowBgAlpha(0.95f);
+            using var style = ImRaii.PushStyle(ImGuiStyleVar.WindowRounding, Plugin.Config.UIRounding)
+                .Push(ImGuiStyleVar.WindowPadding, new Vector2(12, 12));
+        }
+        
         using var popup = ImRaii.Popup(AutoCompleteId);
         if (!popup.Success)
         {
@@ -1432,12 +1539,16 @@ public sealed class ChatLogWindow : Window
             return;
         }
 
+        // Modern search input
         ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputTextWithHint("##auto-complete-filter", Language.AutoTranslate_Search_Hint, ref AutoCompleteInfo.ToComplete, 256, ImGuiInputTextFlags.CallbackAlways | ImGuiInputTextFlags.CallbackHistory, AutoCompleteCallback))
+        using (ModernUI.PushModernInputStyle(Plugin.Config))
         {
-            AutoCompleteList = AutoTranslate.Matching(AutoCompleteInfo.ToComplete, Plugin.Config.SortAutoTranslate);
-            AutoCompleteSelection = 0;
-            AutoCompleteShouldScroll = true;
+            if (ImGui.InputTextWithHint("##auto-complete-filter", Language.AutoTranslate_Search_Hint, ref AutoCompleteInfo.ToComplete, 256, ImGuiInputTextFlags.CallbackAlways | ImGuiInputTextFlags.CallbackHistory, AutoCompleteCallback))
+            {
+                AutoCompleteList = AutoTranslate.Matching(AutoCompleteInfo.ToComplete, Plugin.Config.SortAutoTranslate);
+                AutoCompleteSelection = 0;
+                AutoCompleteShouldScroll = true;
+            }
         }
 
         var selected = -1;
@@ -1471,6 +1582,9 @@ public sealed class ChatLogWindow : Window
             FixCursor = true;
             ImGui.SetKeyboardFocusHere(-1);
         }
+
+        // Modern separator between search and results
+        ModernUI.DrawModernSeparator(Plugin.Config);
 
         using var child = ImRaii.Child("##auto-complete-list", Vector2.Zero, false, ImGuiWindowFlags.HorizontalScrollbar);
         if (!child.Success)
