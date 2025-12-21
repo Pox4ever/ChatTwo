@@ -277,9 +277,12 @@ internal class DMTab : Tab
             {
                 foreach (var message in recentMessages)
                 {
-                    AddMessage(message, unread: false);
+                    // Convert old outgoing messages to "You:" format for consistency
+                    var processedMessage = ConvertOutgoingMessageFormat(message);
+                    
+                    AddMessage(processedMessage, unread: false);
                     // Also add to in-memory history for consistency
-                    History.AddMessage(message, isIncoming: message.IsFromPlayer(Player));
+                    History.AddMessage(processedMessage, isIncoming: processedMessage.IsFromPlayer(Player));
                 }
                 
                 Plugin.Log.Info($"Loaded {recentMessages.Length} messages for DM tab with {Player.DisplayName}");
@@ -292,6 +295,66 @@ internal class DMTab : Tab
         catch (Exception ex)
         {
             Plugin.Log.Error($"Failed to load message history from MessageStore for DMTab {Player.Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Converts old outgoing messages to use "You:" format for consistency in DM tabs.
+    /// </summary>
+    /// <param name="message">The message to potentially convert</param>
+    /// <returns>The converted message or original if no conversion needed</returns>
+    private Message ConvertOutgoingMessageFormat(Message message)
+    {
+        try
+        {
+            // Only convert outgoing tell messages
+            if (message.Code.Type != ChatType.TellOutgoing)
+                return message;
+            
+            // Check if this is an outgoing message (from us to the target player)
+            if (!message.IsToPlayer(Player))
+                return message;
+            
+            // Get the original sender text
+            var originalSender = string.Join("", message.Sender.Select(c => c.StringValue()));
+            
+            // If it already uses "You:" format, no conversion needed
+            if (originalSender.StartsWith("You:"))
+                return message;
+            
+            // If it's the full format (>> PlayerName🌐World:), convert to "You:"
+            if (originalSender.StartsWith(">> ") && originalSender.Contains(": "))
+            {
+                Plugin.Log.Debug($"Converting old outgoing message sender from '{originalSender}' to 'You: '");
+                
+                // Create new sender chunks with "You:" format
+                var newSenderChunks = new List<Chunk>
+                {
+                    new TextChunk(ChunkSource.Sender, null, "You: ")
+                };
+                
+                // Keep the original content chunks
+                var contentChunks = message.Content.ToList();
+                
+                return new Message(
+                    message.Receiver,
+                    message.ContentId,
+                    message.AccountId,
+                    message.Code,
+                    newSenderChunks,
+                    contentChunks,
+                    message.SenderSource,
+                    message.ContentSource
+                );
+            }
+            
+            // No conversion needed
+            return message;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Warning($"Failed to convert outgoing message format: {ex.Message}");
+            return message; // Return original on error
         }
     }
 

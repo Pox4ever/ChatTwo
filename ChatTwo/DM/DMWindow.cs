@@ -17,6 +17,8 @@ using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using Lumina.Excel.Sheets;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Game.Text.SeStringHandling.Payloads;
+using Dalamud.Game.Text;
 
 namespace ChatTwo.DM;
 
@@ -46,6 +48,15 @@ internal class DMWindow : Window
     private bool _cachedIsFriend = false;
     private long _lastFriendCheck = 0;
     private const long FriendCheckInterval = 5000; // Check every 5 seconds
+
+    // Animation state
+    private readonly Dictionary<int, float> _messageAnimations = new();
+    private readonly Dictionary<int, long> _messageAppearTimes = new();
+    private float _windowFadeAlpha = 0f;
+    private bool _isNewWindow = true;
+    private float _scrollTarget = -1f;
+    private float _currentScroll = 0f;
+    private int _lastMessageCount = 0;
 
     public DMWindow(ChatLogWindow chatLogWindow, DMPlayer player) : base($"DM: {player.DisplayName}##dm-window-{player.GetHashCode()}")
     {
@@ -111,84 +122,6 @@ internal class DMWindow : Window
     }
 
     /// <summary>
-    /// Draws a minimize button in the title bar that converts the window back to a tab.
-    /// </summary>
-    private void DrawMinimizeButton()
-    {
-        // Get title bar dimensions
-        var titleBarHeight = ImGui.GetFrameHeight();
-        var windowPos = ImGui.GetWindowPos();
-        var windowSize = ImGui.GetWindowSize();
-        
-        // Calculate button position in title bar (to the left of close button)
-        var buttonSize = titleBarHeight - 4; // Slightly smaller than title bar height
-        var buttonX = windowPos.X + windowSize.X - buttonSize - 30; // 30px from right to avoid close button
-        var buttonY = windowPos.Y + 2; // 2px from top of window
-        
-        // Draw the button using screen coordinates
-        var drawList = ImGui.GetForegroundDrawList();
-        var buttonPos = new Vector2(buttonX, buttonY);
-        var buttonMax = new Vector2(buttonX + buttonSize, buttonY + buttonSize);
-        
-        // Check if mouse is over the button
-        var mousePos = ImGui.GetMousePos();
-        var isHovered = mousePos.X >= buttonPos.X && mousePos.X <= buttonMax.X && 
-                       mousePos.Y >= buttonPos.Y && mousePos.Y <= buttonMax.Y;
-        
-        // Button colors
-        var buttonColor = isHovered ? 
-            ImGui.GetColorU32(ImGuiCol.ButtonHovered) : 
-            ImGui.GetColorU32(ImGuiCol.Button);
-        
-        // Draw button background
-        drawList.AddRectFilled(buttonPos, buttonMax, buttonColor, 3f);
-        
-        // Draw minimize icon (horizontal line)
-        var iconCenter = new Vector2(buttonX + buttonSize / 2, buttonY + buttonSize / 2);
-        var iconSize = buttonSize * 0.4f;
-        var iconStart = new Vector2(iconCenter.X - iconSize / 2, iconCenter.Y);
-        var iconEnd = new Vector2(iconCenter.X + iconSize / 2, iconCenter.Y);
-        
-        drawList.AddLine(iconStart, iconEnd, ImGui.GetColorU32(ImGuiCol.Text), 2f);
-        
-        // Handle click
-        if (isHovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
-        {
-            ConvertWindowToTab();
-        }
-        
-        // Show tooltip
-        if (isHovered)
-        {
-            ImGui.SetTooltip("Minimize to Tab");
-        }
-    }
-
-    /// <summary>
-    /// Converts this DM window back to a tab in the main chat window.
-    /// </summary>
-    private void ConvertWindowToTab()
-    {
-        try
-        {
-            Plugin.Log.Debug($"ConvertWindowToTab: Converting DM window for {Player.DisplayName} back to tab");
-            
-            // Use DMManager to convert window to tab
-            DMManager.Instance.ConvertWindowToTab(Player);
-            
-            // Close this window
-            IsOpen = false;
-            
-            Plugin.Log.Debug($"ConvertWindowToTab: Successfully converted DM window for {Player.DisplayName} to tab");
-        }
-        catch (Exception ex)
-        {
-            Plugin.Log.Error($"ConvertWindowToTab: Failed to convert DM window to tab: {ex.Message}");
-            Plugin.Log.Error($"ConvertWindowToTab: Stack trace: {ex.StackTrace}");
-        }
-    }
-
-    /// <summary>
     /// Loads recent message history into the DMTab for display.
     /// This method loads messages from the persistent MessageStore database,
     /// so message history survives plugin reloads.
@@ -211,7 +144,8 @@ internal class DMWindow : Window
             
             if (currentCount > 0)
             {
-                return; // Already have messages, skip history load
+                Plugin.Log.Debug($"DMWindow: Skipping history load - already have {currentCount} messages");
+                return; // Already have messages, skip history load to avoid duplication
             }
             
             // Load messages from the persistent MessageStore database
@@ -245,9 +179,12 @@ internal class DMWindow : Window
             {
                 foreach (var message in recentMessages)
                 {
-                    DMTab.AddMessage(message, unread: false);
+                    // Convert old outgoing messages to "You:" format for consistency
+                    var processedMessage = ConvertOutgoingMessageFormat(message);
+                    
+                    DMTab.AddMessage(processedMessage, unread: false);
                     // Also add to in-memory history for consistency
-                    History.AddMessage(message, isIncoming: message.IsFromPlayer(Player));
+                    History.AddMessage(processedMessage, isIncoming: processedMessage.IsFromPlayer(Player));
                 }
                 
                 Plugin.Log.Info($"Loaded {recentMessages.Length} messages for DM with {Player.DisplayName}");
@@ -260,6 +197,66 @@ internal class DMWindow : Window
         catch (Exception ex)
         {
             Plugin.Log.Error($"Failed to load message history for DM window: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Converts old outgoing messages to use "You:" format for consistency in DM windows.
+    /// </summary>
+    /// <param name="message">The message to potentially convert</param>
+    /// <returns>The converted message or original if no conversion needed</returns>
+    private Message ConvertOutgoingMessageFormat(Message message)
+    {
+        try
+        {
+            // Only convert outgoing tell messages
+            if (message.Code.Type != ChatType.TellOutgoing)
+                return message;
+            
+            // Check if this is an outgoing message (from us to the target player)
+            if (!message.IsToPlayer(Player))
+                return message;
+            
+            // Get the original sender text
+            var originalSender = string.Join("", message.Sender.Select(c => c.StringValue()));
+            
+            // If it already uses "You:" format, no conversion needed
+            if (originalSender.StartsWith("You:"))
+                return message;
+            
+            // If it's the full format (>> PlayerName🌐World:), convert to "You:"
+            if (originalSender.StartsWith(">> ") && originalSender.Contains(": "))
+            {
+                Plugin.Log.Debug($"Converting old outgoing message sender from '{originalSender}' to 'You: '");
+                
+                // Create new sender chunks with "You:" format
+                var newSenderChunks = new List<Chunk>
+                {
+                    new TextChunk(ChunkSource.Sender, null, "You: ")
+                };
+                
+                // Keep the original content chunks
+                var contentChunks = message.Content.ToList();
+                
+                return new Message(
+                    message.Receiver,
+                    message.ContentId,
+                    message.AccountId,
+                    message.Code,
+                    newSenderChunks,
+                    contentChunks,
+                    message.SenderSource,
+                    message.ContentSource
+                );
+            }
+            
+            // No conversion needed
+            return message;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Warning($"Failed to convert outgoing message format: {ex.Message}");
+            return message; // Return original on error
         }
     }
 
@@ -332,6 +329,39 @@ internal class DMWindow : Window
 
     public override void PreDraw()
     {
+        // Window entrance animation
+        if (_isNewWindow)
+        {
+            var entranceTime = 400f; // 400ms entrance animation
+            var windowAge = FrameTime - (FrameTime - 400); // This logic is wrong, let me fix it
+            
+            // Better approach: track when window was created
+            if (!_messageAppearTimes.ContainsKey(-1)) // Use -1 as window creation marker
+            {
+                _messageAppearTimes[-1] = FrameTime;
+                Plugin.Log.Info($"DMWindow: Starting window entrance animation at {FrameTime}");
+            }
+            
+            var elapsed = FrameTime - _messageAppearTimes[-1];
+            var progress = Math.Min(1f, elapsed / entranceTime);
+            
+            // Smooth ease-out animation
+            _windowFadeAlpha = 1f - (float)Math.Pow(1f - progress, 2);
+            
+            Plugin.Log.Debug($"DMWindow: Window entrance - elapsed: {elapsed}ms, progress: {progress:F2}, alpha: {_windowFadeAlpha:F2}");
+            
+            if (progress >= 1f)
+            {
+                _isNewWindow = false;
+                _windowFadeAlpha = 1f;
+                Plugin.Log.Info("DMWindow: Window entrance animation completed");
+            }
+        }
+        else
+        {
+            _windowFadeAlpha = 1f;
+        }
+
         // Only apply style changes when necessary
         if (Plugin.Config is { OverrideStyle: true, ChosenStyle: not null })
             StyleModel.GetConfiguredStyles()?.FirstOrDefault(style => style.Name == Plugin.Config.ChosenStyle)?.Push();
@@ -384,7 +414,8 @@ internal class DMWindow : Window
             }
         }
         
-        BgAlpha = _cachedBgAlpha;
+        // Apply window entrance animation to background alpha
+        BgAlpha = _cachedBgAlpha * _windowFadeAlpha;
     }
 
     public override void Draw()
@@ -434,6 +465,41 @@ internal class DMWindow : Window
     }
 
     /// <summary>
+    /// Draws a minimize button in the content area at the top-right.
+    /// </summary>
+    private void DrawMinimizeButtonInContent()
+    {
+        // Get available width and calculate button position
+        var availableWidth = ImGui.GetContentRegionAvail().X;
+        var buttonSize = 20f;
+        
+        // Position button at top-right of content area
+        ImGui.SetCursorPosX(availableWidth - buttonSize);
+        
+        // Draw the minimize button with visible styling
+        ImGui.PushStyleColor(ImGuiCol.Button, 0xFF333333); // Dark background
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, 0xFF555555); // Lighter when hovered
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, 0xFF777777); // Even lighter when clicked
+        ImGui.PushStyleColor(ImGuiCol.Text, 0xFFFFFFFF); // White text
+        
+        if (ImGui.Button("−", new Vector2(buttonSize, buttonSize)))
+        {
+            ImGui.SetWindowCollapsed(true);
+        }
+        
+        ImGui.PopStyleColor(4);
+        
+        // Tooltip
+        if (ImGui.IsItemHovered())
+        {
+            ImGuiUtil.Tooltip("Minimize");
+        }
+        
+        // Add some spacing after the button
+        ImGui.Spacing();
+    }
+
+    /// <summary>
     /// Handles window-to-tab conversion when the window is dragged back to the main chat window.
     /// </summary>
     private void HandleWindowToTabConversion()
@@ -466,22 +532,26 @@ internal class DMWindow : Window
     }
 
     /// <summary>
-    /// Draws title bar buttons for common DM actions.
+    /// Converts this DM window back to a tab in the main chat window.
     /// </summary>
-    private void DrawTitleBarButtons()
+    private void ConvertWindowToTab()
     {
-        // Only draw if we have space and the title bar is visible
-        if (Flags.HasFlag(ImGuiWindowFlags.NoTitleBar))
-            return;
-
-        // We can't easily modify the title bar, so we'll add buttons below the title
-        if (Plugin.Config.ModernUIEnabled)
+        try
         {
-            ModernUI.DrawModernSeparator(Plugin.Config);
+            Plugin.Log.Debug($"ConvertWindowToTab: Converting DM window for {Player.DisplayName} back to tab");
+            
+            // Use DMManager to convert window to tab
+            DMManager.Instance.ConvertWindowToTab(Player);
+            
+            // Close this window
+            IsOpen = false;
+            
+            Plugin.Log.Debug($"ConvertWindowToTab: Successfully converted DM window for {Player.DisplayName} to tab");
         }
-        else
+        catch (Exception ex)
         {
-            ImGui.Separator();
+            Plugin.Log.Error($"ConvertWindowToTab: Failed to convert DM window to tab: {ex.Message}");
+            Plugin.Log.Error($"ConvertWindowToTab: Stack trace: {ex.StackTrace}");
         }
     }
 
@@ -506,14 +576,20 @@ internal class DMWindow : Window
     }
 
     /// <summary>
-    /// Internal method to draw the actual action buttons.
+    /// Internal method to draw the actual action buttons with hover animations.
     /// </summary>
     private void DrawActionButtonsInternal(Vector2 buttonSize)
     {
-        // Invite to Party button
-        if (ImGuiUtil.IconButton(FontAwesomeIcon.Users, "invite-party"))
+        var time = (float)(FrameTime / 1000.0);
+        
+        // Invite to Party button with hover animation
+        var inviteHovered = false;
+        using (ImRaii.PushStyle(ImGuiStyleVar.Alpha, GetButtonAlpha("invite", out inviteHovered)))
         {
-            InviteToParty();
+            if (ImGuiUtil.IconButton(FontAwesomeIcon.Users, "invite-party"))
+            {
+                InviteToParty();
+            }
         }
         
         if (ImGui.IsItemHovered())
@@ -529,9 +605,13 @@ internal class DMWindow : Window
         // Add Friend button - only show if not already a friend
         if (!IsPlayerAlreadyFriend())
         {
-            if (ImGuiUtil.IconButton(FontAwesomeIcon.Heart, "add-friend"))
+            var friendHovered = false;
+            using (ImRaii.PushStyle(ImGuiStyleVar.Alpha, GetButtonAlpha("friend", out friendHovered)))
             {
-                AddFriend();
+                if (ImGuiUtil.IconButton(FontAwesomeIcon.Heart, "add-friend"))
+                {
+                    AddFriend();
+                }
             }
             
             if (ImGui.IsItemHovered())
@@ -545,10 +625,14 @@ internal class DMWindow : Window
             ImGui.SameLine();
         }
 
-        // Open Character Card button
-        if (ImGuiUtil.IconButton(FontAwesomeIcon.IdCard, "adventurer-plate"))
+        // Open Character Card button with hover animation
+        var plateHovered = false;
+        using (ImRaii.PushStyle(ImGuiStyleVar.Alpha, GetButtonAlpha("plate", out plateHovered)))
         {
-            OpenAdventurerPlate();
+            if (ImGuiUtil.IconButton(FontAwesomeIcon.IdCard, "adventurer-plate"))
+            {
+                OpenAdventurerPlate();
+            }
         }
         
         if (ImGui.IsItemHovered())
@@ -561,8 +645,36 @@ internal class DMWindow : Window
     }
 
     /// <summary>
+    /// Gets animated alpha for button hover effects.
+    /// </summary>
+    private float GetButtonAlpha(string buttonId, out bool isHovered)
+    {
+        isHovered = ImGui.IsItemHovered();
+        
+        if (!Plugin.Config.ModernUIEnabled)
+        {
+            return 1f; // No animation when ModernUI is disabled
+        }
+        
+        // Smooth hover animation
+        var baseAlpha = 0.8f;
+        var hoverAlpha = 1f;
+        var time = (float)(FrameTime / 1000.0);
+        
+        if (isHovered)
+        {
+            // Animate to hover state
+            var pulse = (float)(Math.Sin(time * 4f) * 0.1f + 0.9f); // Subtle pulse
+            return Math.Min(hoverAlpha, baseAlpha + pulse);
+        }
+        
+        return baseAlpha;
+    }
+
+    /// <summary>
     /// Lightweight message rendering specifically optimized for DM windows.
     /// Avoids the expensive operations in ChatLogWindow.DrawMessageLog.
+    /// Now includes smooth animations for better UX.
     /// </summary>
     private void DrawLightweightMessageLog(IReadOnlyList<Message> messages, float childHeight)
     {
@@ -570,56 +682,282 @@ internal class DMWindow : Window
         if (!child.Success)
             return;
 
+        // Detect new messages for animations
+        if (messages.Count != _lastMessageCount)
+        {
+            Plugin.Log.Debug($"DMWindow: New messages detected! Count changed from {_lastMessageCount} to {messages.Count}");
+            
+            // New messages detected - set up animations
+            for (int i = _lastMessageCount; i < messages.Count; i++)
+            {
+                _messageAnimations[i] = 0f; // Start invisible
+                _messageAppearTimes[i] = FrameTime;
+                Plugin.Log.Debug($"DMWindow: Setting up animation for message {i}");
+            }
+            _lastMessageCount = messages.Count;
+            
+            // Set scroll target to bottom for new messages
+            _scrollTarget = float.MaxValue;
+        }
+
         using (ImRaii.PushStyle(ImGuiStyleVar.ItemSpacing, Vector2.Zero))
         {
-            // Simple message rendering without expensive height calculations, visibility checks, etc.
+            // Simple message rendering with animations
             var maxMessages = Math.Min(messages.Count, Plugin.Config.MaxLinesToRender);
             var startIndex = Math.Max(0, messages.Count - maxMessages);
+            
+            // Track last timestamp to avoid repetition (like regular chat)
+            string? lastTimestamp = null;
             
             for (var i = startIndex; i < messages.Count; i++)
             {
                 var message = messages[i];
                 
-                // Simple timestamp rendering (if enabled)
-                if (DMTab.DisplayTimestamp)
+                // Calculate animation alpha for this message
+                var messageAlpha = GetMessageAlpha(i);
+                
+                if (messageAlpha <= 0.01f)
+                    continue; // Skip invisible messages
+                
+                // Apply message alpha
+                using (ImRaii.PushStyle(ImGuiStyleVar.Alpha, messageAlpha))
                 {
-                    var localTime = message.Date.ToLocalTime();
-                    var timestamp = localTime.ToString("t");
-                    
-                    using (ImRaii.PushColor(ImGuiCol.Text, 0xFFFFFFFF))
+                    // Draw timestamp like regular chat (24h format, no repetition, proper spacing)
+                    if (DMTab.DisplayTimestamp)
                     {
-                        ImGui.TextUnformatted($"[{timestamp}] ");
+                        var localTime = message.Date.ToLocalTime();
+                        var currentTimestamp = localTime.ToString("HH:mm"); // 24h format like regular chat
+                        
+                        // Only show timestamp if it's different from the last one (like regular chat)
+                        if (currentTimestamp != lastTimestamp)
+                        {
+                            using (ImRaii.PushColor(ImGuiCol.Text, 0xFF888888)) // Gray color like regular chat
+                            {
+                                ImGui.TextUnformatted(currentTimestamp);
+                            }
+                            ImGui.SameLine();
+                            
+                            // Add proper spacing after timestamp (like regular chat)
+                            ImGui.Dummy(new Vector2(8, 0)); // More spacing like regular chat
+                            ImGui.SameLine();
+                            
+                            lastTimestamp = currentTimestamp;
+                        }
+                        else
+                        {
+                            // Same timestamp as previous message - add equivalent spacing
+                            ImGui.Dummy(new Vector2(ImGui.CalcTextSize(currentTimestamp).X + 8, 0));
+                            ImGui.SameLine();
+                        }
                     }
-                    ImGui.SameLine();
-                }
 
-                // Draw sender (if present)
-                if (message.Sender.Count > 0)
-                {
-                    DrawSimpleChunks(message.Sender);
-                    ImGui.SameLine();
-                }
+                    // Draw sender (if present)
+                    if (message.Sender.Count > 0)
+                    {
+                        DrawAnimatedChunks(message.Sender, messageAlpha, message);
+                        ImGui.SameLine();
+                    }
 
-                // Draw content
-                if (message.Content.Count > 0)
-                {
-                    DrawSimpleChunks(message.Content);
-                }
-                else
-                {
-                    ImGui.TextUnformatted(" "); // Ensure something is drawn
+                    // Draw content
+                    if (message.Content.Count > 0)
+                    {
+                        DrawAnimatedChunks(message.Content, messageAlpha, message);
+                    }
+                    else
+                    {
+                        ImGui.TextUnformatted(" "); // Ensure something is drawn
+                    }
                 }
             }
         }
 
-        // Auto-scroll to bottom
-        if (ImGui.GetScrollY() >= ImGui.GetScrollMaxY())
-            ImGui.SetScrollHereY(1f);
+        // Smooth scrolling animation
+        HandleSmoothScrolling();
     }
 
     /// <summary>
-    /// Simple chunk rendering without expensive payload handling.
+    /// Calculates the alpha value for message fade-in animation.
     /// </summary>
+    private float GetMessageAlpha(int messageIndex)
+    {
+        // If ModernUI is disabled, always show messages fully
+        if (!Plugin.Config.ModernUIEnabled)
+        {
+            return 1f;
+        }
+
+        if (!_messageAnimations.TryGetValue(messageIndex, out var currentAlpha))
+        {
+            return 1f; // Fully visible for existing messages
+        }
+
+        if (!_messageAppearTimes.TryGetValue(messageIndex, out var appearTime))
+        {
+            return 1f;
+        }
+
+        // Animate over 300ms
+        var animationDuration = 300f;
+        var elapsed = FrameTime - appearTime;
+        var progress = Math.Min(1f, elapsed / animationDuration);
+        
+        // Smooth easing function (ease-out)
+        var easedProgress = 1f - (float)Math.Pow(1f - progress, 3);
+        
+        // Update cached alpha
+        _messageAnimations[messageIndex] = easedProgress;
+        
+        // Debug logging for first few frames
+        if (elapsed < 100)
+        {
+            Plugin.Log.Debug($"DMWindow: Message {messageIndex} animation - elapsed: {elapsed}ms, progress: {progress:F2}, alpha: {easedProgress:F2}");
+        }
+        
+        return easedProgress;
+    }
+
+    /// <summary>
+    /// Handles smooth scrolling to new messages.
+    /// </summary>
+    private void HandleSmoothScrolling()
+    {
+        if (_scrollTarget < 0)
+            return;
+
+        var currentScrollY = ImGui.GetScrollY();
+        var maxScrollY = ImGui.GetScrollMaxY();
+        
+        // If we want to scroll to bottom
+        if (_scrollTarget >= maxScrollY)
+        {
+            var targetScroll = maxScrollY;
+            var scrollDiff = targetScroll - currentScrollY;
+            
+            if (Math.Abs(scrollDiff) < 1f)
+            {
+                // Close enough, snap to target
+                ImGui.SetScrollY(targetScroll);
+                _scrollTarget = -1f;
+            }
+            else
+            {
+                // Smooth interpolation
+                var lerpSpeed = 0.15f; // Adjust for faster/slower scrolling
+                var newScroll = currentScrollY + scrollDiff * lerpSpeed;
+                ImGui.SetScrollY(newScroll);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Simple chunk rendering with animation support and CrossWorld icon support.
+    /// Now includes error message coloring.
+    /// </summary>
+    private void DrawAnimatedChunks(IReadOnlyList<Chunk> chunks, float messageAlpha, Message message)
+    {
+        for (var i = 0; i < chunks.Count; i++)
+        {
+            var chunk = chunks[i];
+            
+            if (i > 0)
+                ImGui.SameLine();
+            
+            // Handle different chunk types with animation
+            switch (chunk)
+            {
+                case TextChunk textChunk:
+                    // Determine color based on message type
+                    uint baseColor;
+                    if (message.Code.Type == ChatType.Error)
+                    {
+                        baseColor = 0xFF4444FF; // Red color for error messages (ABGR format)
+                    }
+                    else
+                    {
+                        baseColor = 0xFFFFFFFF; // White for normal messages
+                    }
+                    
+                    var animatedColor = ApplyAlphaToColor(baseColor, messageAlpha);
+                    
+                    using (ImRaii.PushColor(ImGuiCol.Text, ColourUtil.RgbaToAbgr(animatedColor)))
+                    {
+                        ImGui.TextUnformatted(textChunk.Content);
+                    }
+                    break;
+                    
+                case IconChunk iconChunk:
+                    // Handle CrossWorld and other icons
+                    var iconColor = ApplyAlphaToColor(0xFFFFFFFF, messageAlpha);
+                    using (ImRaii.PushColor(ImGuiCol.Text, ColourUtil.RgbaToAbgr(iconColor)))
+                    {
+                        // Check if this is a CrossWorld icon
+                        if (iconChunk.Icon == BitmapFontIcon.CrossWorld)
+                        {
+                            // Render the CrossWorld icon using the same character as main chat
+                            ImGui.TextUnformatted($"{(char)SeIconChar.CrossWorld}");
+                        }
+                        else
+                        {
+                            // For other icons, show a generic representation
+                            ImGui.TextUnformatted($"[{iconChunk.Icon}]");
+                        }
+                    }
+                    break;
+                    
+                default:
+                    // Fallback for unknown chunk types
+                    var fallbackColor = ApplyAlphaToColor(0xFFFFFFFF, messageAlpha);
+                    using (ImRaii.PushColor(ImGuiCol.Text, ColourUtil.RgbaToAbgr(fallbackColor)))
+                    {
+                        ImGui.TextUnformatted(chunk.StringValue());
+                    }
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Applies alpha to a color while preserving RGB values.
+    /// </summary>
+    private uint ApplyAlphaToColor(uint color, float alpha)
+    {
+        var a = (byte)(((color >> 24) & 0xFF) * alpha);
+        var r = (byte)((color >> 16) & 0xFF);
+        var g = (byte)((color >> 8) & 0xFF);
+        var b = (byte)(color & 0xFF);
+        
+        return ((uint)a << 24) | ((uint)r << 16) | ((uint)g << 8) | b;
+    }
+
+    /// <summary>
+    /// Draws an animated typing indicator with bouncing dots.
+    /// </summary>
+    private void DrawAnimatedTypingIndicator()
+    {
+        var time = (float)(FrameTime / 1000.0); // Convert to seconds
+        var baseColor = 0xFF888888;
+        
+        using (ImRaii.PushColor(ImGuiCol.Text, ColourUtil.RgbaToAbgr(baseColor)))
+        {
+            ImGui.TextUnformatted("Typing");
+            ImGui.SameLine();
+            
+            // Animated dots with different phases
+            for (int i = 0; i < 3; i++)
+            {
+                var phase = time * 3f + i * 0.5f; // Different timing for each dot
+                var bounce = (float)(Math.Sin(phase) * 0.5 + 0.5); // 0 to 1
+                var alpha = 0.3f + bounce * 0.7f; // 0.3 to 1.0
+                
+                var dotColor = ApplyAlphaToColor(baseColor, alpha);
+                using (ImRaii.PushColor(ImGuiCol.Text, ColourUtil.RgbaToAbgr(dotColor)))
+                {
+                    ImGui.TextUnformatted(".");
+                    if (i < 2) ImGui.SameLine();
+                }
+            }
+        }
+    }
     private void DrawSimpleChunks(IReadOnlyList<Chunk> chunks)
     {
         for (var i = 0; i < chunks.Count; i++)
@@ -633,8 +971,8 @@ internal class DMWindow : Window
             switch (chunk)
             {
                 case TextChunk textChunk:
-                    // Get chunk color
-                    var color = textChunk.Foreground ?? textChunk.FallbackColour?.DefaultColor() ?? 0xFFFFFFFF;
+                    // Get chunk color - use white for DM windows for better readability
+                    var color = 0xFFFFFFFF; // Always use white in DM context
                     
                     using (ImRaii.PushColor(ImGuiCol.Text, ColourUtil.RgbaToAbgr(color)))
                     {
@@ -695,6 +1033,46 @@ internal class DMWindow : Window
     }
 
     /// <summary>
+    /// Draws the minimize button on the left side of the input area.
+    /// </summary>
+    private void DrawMinimizeButton(Vector2 buttonSize)
+    {
+        if (Plugin.Config.ModernUIEnabled)
+        {
+            using (ModernUI.PushModernButtonStyle(Plugin.Config))
+            {
+                var minimizeHovered = false;
+                using (ImRaii.PushStyle(ImGuiStyleVar.Alpha, GetButtonAlpha("minimize", out minimizeHovered)))
+                {
+                    if (ImGuiUtil.IconButton(FontAwesomeIcon.Minus, "convert-to-tab"))
+                    {
+                        ConvertWindowToTab();
+                    }
+                }
+            }
+        }
+        else
+        {
+            var minimizeHovered = false;
+            using (ImRaii.PushStyle(ImGuiStyleVar.Alpha, GetButtonAlpha("minimize", out minimizeHovered)))
+            {
+                if (ImGuiUtil.IconButton(FontAwesomeIcon.Minus, "convert-to-tab"))
+                {
+                    ConvertWindowToTab();
+                }
+            }
+        }
+        
+        if (ImGui.IsItemHovered())
+        {
+            if (Plugin.Config.ModernUIEnabled)
+                ModernUI.DrawModernTooltip("Convert to Tab", Plugin.Config);
+            else
+                ImGuiUtil.Tooltip("Convert to Tab");
+        }
+    }
+
+    /// <summary>
     /// Draws the DM-specific input area that sends tells to the target player.
     /// </summary>
     private void DrawDMInputArea()
@@ -708,12 +1086,25 @@ internal class DMWindow : Window
             ImGui.Separator();
         }
         
-        // Cache button calculations to avoid recalculating every frame
-        var buttonSize = new Vector2(24, 24); // Match the button size in DrawActionButtons
+        // Better button layout calculation - give even more space to buttons
+        var availableWidth = ImGui.GetContentRegionAvail().X;
+        var buttonSize = new Vector2(24, 24);
         var spacing = ImGui.GetStyle().ItemSpacing.X;
-        var buttonCount = IsPlayerAlreadyFriend() ? 2 : 3; // Cache friend status check
-        var totalButtonWidth = (buttonSize.X + spacing) * buttonCount;
-        var inputWidth = ImGui.GetContentRegionAvail().X - totalButtonWidth;
+        
+        // Count buttons more accurately (right side buttons only)
+        var buttonCount = IsPlayerAlreadyFriend() ? 2 : 3; // invite, (friend), adventurer plate
+        var totalButtonWidth = (buttonSize.X * buttonCount) + (spacing * (buttonCount + 3)); // More extra spacing for safety
+        
+        // Account for minimize button on the left side
+        var minimizeButtonWidth = buttonSize.X + spacing;
+        
+        // Make input field shorter to accommodate both left minimize button and right action buttons
+        // Increased margin from 20 to 40 to give more space for buttons
+        var inputWidth = Math.Max(80, availableWidth - totalButtonWidth - minimizeButtonWidth - 40);
+
+        // Draw minimize button on the left side
+        DrawMinimizeButton(buttonSize);
+        ImGui.SameLine();
 
         // Input field for DM messages - always treats non-command input as tells
         var inputType = ChatType.TellOutgoing;
@@ -780,7 +1171,10 @@ internal class DMWindow : Window
         {
             var currentPos = ImGui.GetCursorPos();
             ImGui.SetCursorPos(currentPos + new Vector2(8, 4)); // Offset from left edge
-            ModernUI.DrawTypingIndicator(true, Plugin.Config);
+            
+            // Animated typing indicator
+            DrawAnimatedTypingIndicator();
+            
             ImGui.SetCursorPos(currentPos + new Vector2(0, 16)); // Move cursor down to reserve space
         }
     }
@@ -856,9 +1250,8 @@ internal class DMWindow : Window
                 
                 Plugin.Log.Debug($"SendDMMessage: Tell command sent, waiting for game to echo back as TellOutgoing");
                 
-                // TEMPORARY FIX: Also display the message immediately in the DM window
-                // This ensures the user sees their message even if the routing fails
-                DisplayOutgoingMessage(trimmedMessage);
+                // DON'T display the message immediately - let the game's echo handle it
+                // This prevents duplicate messages
             }
 
             // Clear input after sending
@@ -875,52 +1268,6 @@ internal class DMWindow : Window
                 ["MessageLength"] = trimmedMessage.Length,
                 ["IsCommand"] = trimmedMessage.StartsWith('/')
             });
-        }
-    }
-
-    /// <summary>
-    /// Displays an outgoing message in the DM interface with appropriate styling.
-    /// </summary>
-    private void DisplayOutgoingMessage(string messageContent)
-    {
-        try
-        {
-            // Use consistent "You" format like main chat
-            var senderText = ">> You: ";
-            
-            // Create a fake outgoing tell message for display with proper sender name
-            // We need to create the message with proper sender chunks that include the player name
-            var senderChunks = new List<Chunk>
-            {
-                new TextChunk(ChunkSource.Sender, null, senderText)
-            };
-            
-            var contentChunks = new List<Chunk>
-            {
-                new TextChunk(ChunkSource.Content, null, messageContent)
-            };
-            
-            var outgoingMessage = new Message(
-                Plugin.PlayerState.ContentId,
-                0, // ContentId
-                0, // AccountId
-                new ChatCode((ushort)ChatType.TellOutgoing),
-                senderChunks,
-                contentChunks,
-                new SeString(), // SenderSource
-                new SeString()  // ContentSource
-            );
-            
-            // Add to both the tab and history
-            DMTab.AddMessage(outgoingMessage, unread: false);
-            History.AddMessage(outgoingMessage, isIncoming: false);
-            
-            // Track this outgoing tell for error message routing
-            ChatLogWindow.Plugin.DMMessageRouter.HandleOutgoingTell(Player, outgoingMessage);
-        }
-        catch (Exception ex)
-        {
-            Plugin.Log.Error($"Failed to display outgoing message: {ex.Message}");
         }
     }
 

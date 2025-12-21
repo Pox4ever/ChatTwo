@@ -1,6 +1,7 @@
 using System;
 using ChatTwo.Code;
 using Lumina.Excel.Sheets;
+using Dalamud.Game.Text;
 
 namespace ChatTwo.DM;
 
@@ -172,7 +173,9 @@ internal class DMMessageRouter
             var dmWindow = dmManager.GetDMWindow(targetPlayer);
             if (dmWindow != null)
             {
-                // The message will be displayed through the DMTab that the window uses
+                // Add the message to the DM window's internal DMTab
+                dmWindow.DMTab.AddMessage(modifiedMessage, unread: false);
+                Plugin.Log.Debug($"ProcessOutgoingTell: Routed message to DM window for {targetPlayer.DisplayName}");
             }
 
             // Add to DM history
@@ -237,32 +240,51 @@ internal class DMMessageRouter
     {
         try
         {
-            // Get the current player's name - handle threading issues gracefully
-            string playerName;
+            // Debug logging to understand message structure
+            var originalSender = string.Join("", originalMessage.Sender.Select(c => c.StringValue()));
+            var originalContent = string.Join("", originalMessage.Content.Select(c => c.StringValue()));
+            Plugin.Log.Debug($"CreateOutgoingTellMessage: Original sender='{originalSender}', content='{originalContent}'");
+            
+            // Extract just the message content from the content chunks
+            var messageContent = string.Join("", originalMessage.Content.Select(c => c.StringValue()));
+            
+            // Create a simpler sender format for DM windows
+            // Option 1: Use "You: " for a cleaner look in DM context
+            var simpleSender = "You: ";
+            
+            // Option 2: If you prefer your character name, uncomment this section:
+            /*
+            var simpleSender = "You: "; // Default fallback
             try
             {
-                var localPlayer = Plugin.ObjectTable.LocalPlayer;
-                playerName = localPlayer?.Name.ToString() ?? "You";
+                // Try to get character name from the original sender
+                var originalSenderText = string.Join("", originalMessage.Sender.Select(c => c.StringValue()));
+                if (originalSenderText.StartsWith(">> ") && originalSenderText.Contains(": "))
+                {
+                    var nameStart = 3; // Skip ">> "
+                    var nameEnd = originalSenderText.IndexOf(": ");
+                    if (nameEnd > nameStart)
+                    {
+                        var fullName = originalSenderText.Substring(nameStart, nameEnd - nameStart);
+                        // Remove world info if present (everything after CrossWorld character)
+                        var crossWorldIndex = fullName.IndexOf((char)SeIconChar.CrossWorld);
+                        var characterName = crossWorldIndex > 0 ? fullName.Substring(0, crossWorldIndex) : fullName;
+                        simpleSender = $"{characterName}: ";
+                    }
+                }
             }
             catch (Exception ex)
             {
-                Plugin.Log.Debug($"Could not access LocalPlayer (likely threading issue): {ex.Message}");
-                playerName = "You";
+                Plugin.Log.Debug($"Failed to extract character name, using 'You': {ex.Message}");
             }
+            */
             
-            // Extract the message content (without the >> prefix that might be there)
-            var messageContent = string.Join("", originalMessage.Content.Select(c => c.StringValue()));
+            Plugin.Log.Debug($"CreateOutgoingTellMessage: Using simple sender format '{simpleSender}', messageContent='{messageContent}'");
             
-            // Remove any existing >> prefix
-            if (messageContent.StartsWith(">> "))
-            {
-                messageContent = messageContent.Substring(3);
-            }
-            
-            // Create proper sender chunks with player name
+            // Create simple sender chunks for DM context
             var senderChunks = new List<Chunk>
             {
-                new TextChunk(ChunkSource.Sender, null, $">> {playerName}: ")
+                new TextChunk(ChunkSource.Sender, null, simpleSender)
             };
             
             var contentChunks = new List<Chunk>
@@ -349,6 +371,11 @@ internal class DMMessageRouter
 
         // Add to DM window if it exists (via its internal DMTab)
         var dmWindow = dmManager.GetDMWindow(targetPlayer);
+        if (dmWindow != null)
+        {
+            // Add the error message to the DM window's internal DMTab
+            dmWindow.DMTab.AddMessage(message, unread: false);
+        }
 
         // Also add to DM history for persistence
         var history = dmManager.GetHistory(targetPlayer);
