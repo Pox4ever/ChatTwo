@@ -326,6 +326,7 @@ internal class DMWindow : Window
     private bool _lastModernUIEnabled = false;
     private float _cachedBgAlpha = 1.0f;
     private long _lastPreDrawFrame = 0;
+    private bool _isWindowFocused = true; // Track window focus state for transparency
 
     public override void PreDraw()
     {
@@ -388,30 +389,26 @@ internal class DMWindow : Window
         if (!DMTab.CanResize)
             Flags |= ImGuiWindowFlags.NoResize;
 
-        // Optimize alpha calculation - only recalculate every few frames
-        if (FrameTime - _lastPreDrawFrame > 50) // Update every ~50ms instead of every frame
+        // Calculate base alpha from settings
+        var alpha = DMTab.IndependentOpacity ? DMTab.Opacity : Plugin.Config.WindowAlpha;
+        
+        // Apply unfocused transparency if ModernUI is enabled
+        if (Plugin.Config.ModernUIEnabled)
         {
-            _lastPreDrawFrame = FrameTime;
-            
-            var alpha = DMTab.IndependentOpacity ? DMTab.Opacity : Plugin.Config.WindowAlpha;
-            
-            if (modernUIEnabled)
+            // Use cached focus state that gets updated in Draw()
+            if (!_isWindowFocused)
             {
-                var isWindowFocused = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
-                if (!isWindowFocused)
-                {
-                    var transparencyFactor = Plugin.Config.UnfocusedTransparency / 100f;
-                    _cachedBgAlpha = (alpha / 100f) * transparencyFactor;
-                }
-                else
-                {
-                    _cachedBgAlpha = alpha / 100f;
-                }
+                var transparencyFactor = Plugin.Config.UnfocusedTransparency / 100f;
+                _cachedBgAlpha = (alpha / 100f) * transparencyFactor;
             }
             else
             {
                 _cachedBgAlpha = alpha / 100f;
             }
+        }
+        else
+        {
+            _cachedBgAlpha = alpha / 100f;
         }
         
         // Apply window entrance animation to background alpha
@@ -456,11 +453,17 @@ internal class DMWindow : Window
         DrawDMInputArea();
 
         // Mark as read when window is focused - only check every few frames to reduce overhead
-        if ((FrameTime % 100) == 0 && ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows))
+        // Also update focus state for transparency
+        if ((FrameTime % 100) == 0)
         {
-            LastActivityTime = FrameTime;
-            History.MarkAsRead();
-            DMTab.MarkAsRead();
+            _isWindowFocused = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
+            
+            if (_isWindowFocused)
+            {
+                LastActivityTime = FrameTime;
+                History.MarkAsRead();
+                DMTab.MarkAsRead();
+            }
         }
     }
 
@@ -678,7 +681,8 @@ internal class DMWindow : Window
     /// </summary>
     private void DrawLightweightMessageLog(IReadOnlyList<Message> messages, float childHeight)
     {
-        using var child = ImRaii.Child("##dm-messages", new Vector2(-1, childHeight));
+        // Add NoBackground flag to prevent darker background
+        using var child = ImRaii.Child("##dm-messages", new Vector2(-1, childHeight), false, ImGuiWindowFlags.NoBackground);
         if (!child.Success)
             return;
 

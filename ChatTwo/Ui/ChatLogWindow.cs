@@ -458,7 +458,28 @@ public sealed class ChatLogWindow : Window
             Flags |= ImGuiWindowFlags.NoTitleBar;
 
         if (LastViewport == ImGuiHelpers.MainViewport.Handle && !WasDocked)
-            BgAlpha = Plugin.Config.WindowAlpha / 100f;
+        {
+            var alpha = Plugin.Config.WindowAlpha / 100f;
+            
+            // Apply unfocused transparency if ModernUI is enabled
+            if (Plugin.Config.ModernUIEnabled)
+            {
+                var isWindowFocused = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
+                if (!isWindowFocused)
+                {
+                    var transparencyFactor = Plugin.Config.UnfocusedTransparency / 100f;
+                    BgAlpha = alpha * transparencyFactor;
+                }
+                else
+                {
+                    BgAlpha = alpha;
+                }
+            }
+            else
+            {
+                BgAlpha = alpha;
+            }
+        }
 
         LastViewport = ImGui.GetWindowViewport().Handle;
         WasDocked = ImGui.IsWindowDocked();
@@ -1055,8 +1076,8 @@ public sealed class ChatLogWindow : Window
             );
         }
         
-        using (var dmChild = ImRaii.Child("##dm-conversation", new Vector2(-1, height), true, 
-            ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoMove))
+        using (var dmChild = ImRaii.Child("##dm-conversation", new Vector2(-1, height), false, 
+            ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoBackground))
         {
             if (dmChild.Success)
             {

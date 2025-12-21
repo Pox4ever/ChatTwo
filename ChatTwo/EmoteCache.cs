@@ -877,7 +877,24 @@ public static class EmoteCache
 
         public virtual void Draw(Vector2 size)
         {
-            ImGui.Image(Texture!.Handle, size);
+            if (Texture?.Handle != null)
+            {
+                ImGui.Image(Texture.Handle, size);
+            }
+            else
+            {
+                // Draw a placeholder when texture is not loaded
+                var drawList = ImGui.GetWindowDrawList();
+                var pos = ImGui.GetCursorScreenPos();
+                var color = ImGui.GetColorU32(ImGuiCol.TextDisabled);
+                
+                // Draw a simple rectangle placeholder
+                drawList.AddRect(pos, pos + size, color);
+                drawList.AddText(pos + new Vector2(2, 2), color, "?");
+                
+                // Advance cursor
+                ImGui.Dummy(size);
+            }
         }
 
         internal async Task<byte[]> LoadAsync(Emote emote)
