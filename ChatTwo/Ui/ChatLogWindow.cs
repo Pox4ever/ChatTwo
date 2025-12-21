@@ -762,7 +762,8 @@ public sealed class ChatLogWindow : Window
 
         // Calculate remaining height for message log and input
         var remainingHeight = ImGui.GetContentRegionAvail().Y;
-        var inputHeight = ImGui.GetFrameHeightWithSpacing() * 2; // Reserve space for channel name + input
+        // Minimal reserved space: just enough for channel name + input field
+        var inputHeight = ImGui.GetFrameHeight() * 2 + ImGui.GetStyle().ItemSpacing.Y * 0.5f;
         var messageHeight = remainingHeight - inputHeight;
         
         // Ensure we have minimum space for input
@@ -776,14 +777,17 @@ public sealed class ChatLogWindow : Window
         // The nested child windows were blocking right-click events from reaching the message area
         DrawMessageLog(activeRegularTab, PayloadHandler, messageHeight, false);
 
-        // Draw channel name
-        using (ImRaii.PushStyle(ImGuiStyleVar.ItemSpacing, Vector2.Zero))
+        // Draw channel name with reduced spacing
+        using (ImRaii.PushStyle(ImGuiStyleVar.ItemSpacing, new Vector2(0, 2))) // Minimal vertical spacing
         {
             DrawChannelName(activeRegularTab);
         }
 
-        // Draw channel selector and input for regular chat
-        DrawRegularChatInput(activeRegularTab);
+        // Draw channel selector and input for regular chat with reduced spacing
+        using (ImRaii.PushStyle(ImGuiStyleVar.ItemSpacing, new Vector2(ImGui.GetStyle().ItemSpacing.X, 2))) // Keep horizontal spacing, reduce vertical
+        {
+            DrawRegularChatInput(activeRegularTab);
+        }
     }
 
     private void UpdateDMPaneAnimation(bool shouldShowDMPane)
@@ -1113,26 +1117,27 @@ public sealed class ChatLogWindow : Window
                 ImGui.Separator();
 
         // DM message area with smooth scrolling - CRITICAL FIX: Add NoInputs flag to prevent blocking context menus
-        var messageHeight = ImGui.GetContentRegionAvail().Y - 40; // Reserve space for input
-        using (var messageChild = ImRaii.Child("##dm-messages", new Vector2(-1, messageHeight), false, 
-            ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoInputs))
+        // Use EXACTLY the same spacing calculation as regular chat for consistency
+        var availableHeight = ImGui.GetContentRegionAvail().Y;
+        var inputHeight = ImGui.GetFrameHeight() * 2 + ImGui.GetStyle().ItemSpacing.Y * 0.5f; // Same as regular chat
+        var messageHeight = availableHeight - inputHeight;
+        
+        // Ensure we have minimum space for input (same logic as regular chat)
+        if (messageHeight < 50) // Minimum message area height
         {
-            if (messageChild.Success)
-            {
-                // Add subtle background for message area
-                var msgBgColor = ImGui.GetColorU32(ImGuiCol.FrameBg) & 0x00FFFFFF | ((uint)(alpha * 20) << 24);
-                drawList.AddRectFilled(
-                    ImGui.GetCursorScreenPos(),
-                    ImGui.GetCursorScreenPos() + new Vector2(ImGui.GetContentRegionAvail().X, messageHeight),
-                    msgBgColor
-                );
-                
-                DrawMessageLog(activeDMTab, PayloadHandler, messageHeight, false);
-            }
+            messageHeight = 50;
+            inputHeight = availableHeight - messageHeight;
         }
+        
+        // CRITICAL FIX: Draw message log directly without child window to match regular chat
+        // This eliminates the darker background and ensures consistent spacing
+        DrawMessageLog(activeDMTab, PayloadHandler, messageHeight, false);
 
-                // DM input area with enhanced styling
-                DrawDMInputArea(activeDMTab, alpha);
+                // DM input area with enhanced styling and minimal spacing
+                using (ImRaii.PushStyle(ImGuiStyleVar.ItemSpacing, new Vector2(ImGui.GetStyle().ItemSpacing.X, 2))) // Minimal vertical spacing
+                {
+                    DrawDMInputArea(activeDMTab, alpha);
+                }
             }
         }
     }
@@ -2223,7 +2228,8 @@ public sealed class ChatLogWindow : Window
     {
         // Use unique child window IDs to prevent conflicts between DM pane and regular chat
         var childId = tab is DMTab ? "##chat2-dm-messages" : "##chat2-messages";
-        using var child = ImRaii.Child(childId, new Vector2(-1, childHeight));
+        // Disable child window background to match the parent window
+        using var child = ImRaii.Child(childId, new Vector2(-1, childHeight), false, ImGuiWindowFlags.NoBackground);
         if (!child.Success)
             return;
 
