@@ -613,20 +613,19 @@ public sealed class ChatLogWindow : Window
         // Get animated height based on progress
         var animatedDMPaneHeight = dmPaneHeight * _dmPaneAnimationProgress;
         
-        // Handle window size expansion upward
+        // Handle window expansion upward (re-enabled with stability improvements)
         HandleWindowExpansion(shouldShowDMPane, animatedDMPaneHeight);
         
-        // Draw DM pane if active and not collapsed
-        if (animatedDMPaneHeight > 0 && activeDMTab != null)
+        // Draw DM pane if active and not collapsed (only draw if there's meaningful height)
+        if (animatedDMPaneHeight > 1.0f && activeDMTab != null)
         {
             DrawDMPane(activeDMTab, animatedDMPaneHeight);
         }
         
-        // CRITICAL FIX: Calculate remaining height AFTER DM pane to prevent overlap
-        // This ensures the regular chat area is positioned below the DM pane, not overlapping
+        // Calculate remaining height for regular chat (after DM pane)
         var remainingHeight = ImGui.GetContentRegionAvail().Y;
         
-        // Draw regular chat area with the remaining space (positioned below DM pane)
+        // Draw regular chat area with the remaining space
         DrawRegularChatArea(remainingHeight);
     }
 
@@ -638,39 +637,35 @@ public sealed class ChatLogWindow : Window
 
     private void HandleWindowExpansion(bool shouldShowDMPane, float animatedHeight)
     {
-        // Store original window size and position when first showing DM pane
-        if (shouldShowDMPane && !_hasStoredOriginalWindow && animatedHeight > 5.0f)
+        // Expand window upward when showing DM pane
+        if (shouldShowDMPane && !_hasStoredOriginalWindow && animatedHeight > 10.0f)
         {
             _originalWindowSize = ImGui.GetWindowSize();
             _originalWindowPos = ImGui.GetWindowPos();
             _hasStoredOriginalWindow = true;
         }
         
-        // Only adjust window size if we have stored the original and there's a significant change
+        // Continuously adjust window size during animation (both opening and closing)
         if (_hasStoredOriginalWindow)
         {
-            var heightDifference = animatedHeight - _lastDMPaneHeight;
+            var fullDMPaneHeight = _originalWindowSize.Y * 0.5f; // 50% of original height
+            var currentExpansion = fullDMPaneHeight * _dmPaneAnimationProgress;
             
-            // Use a larger threshold to prevent micro-adjustments that cause glitchiness
-            if (Math.Abs(heightDifference) > 3.0f)
-            {
-                var currentPos = ImGui.GetWindowPos();
-                
-                // Expand window upward: move position up and increase height
-                var newPos = new Vector2(currentPos.X, currentPos.Y - heightDifference);
-                var newSize = new Vector2(_originalWindowSize.X, _originalWindowSize.Y + animatedHeight);
-                
-                ImGui.SetWindowPos(newPos);
-                ImGui.SetWindowSize(newSize);
-            }
+            // Calculate new window size and position
+            var newHeight = _originalWindowSize.Y + currentExpansion;
+            var newY = _originalWindowPos.Y - currentExpansion;
             
-            // Reset to original when DM pane is completely hidden
-            if (!shouldShowDMPane && animatedHeight <= 5.0f)
-            {
-                ImGui.SetWindowPos(_originalWindowPos);
-                ImGui.SetWindowSize(_originalWindowSize);
-                _hasStoredOriginalWindow = false;
-            }
+            // Apply the changes smoothly during both opening and closing
+            ImGui.SetWindowPos(new Vector2(_originalWindowPos.X, newY));
+            ImGui.SetWindowSize(new Vector2(_originalWindowSize.X, newHeight));
+        }
+        
+        // Reset to original only when animation is completely finished AND pane is hidden
+        if (!shouldShowDMPane && _hasStoredOriginalWindow && _dmPaneAnimationProgress <= 0.0f && !_dmPaneAnimating)
+        {
+            ImGui.SetWindowPos(_originalWindowPos);
+            ImGui.SetWindowSize(_originalWindowSize);
+            _hasStoredOriginalWindow = false;
         }
         
         _lastDMPaneHeight = animatedHeight;
@@ -742,8 +737,8 @@ public sealed class ChatLogWindow : Window
                 _dmPaneAnimationProgress = 1f - easedProgress;
             }
             
-            // Animation complete - use a more conservative threshold
-            if (progress >= 0.95f)
+            // Animation complete - use exact threshold to prevent flicker
+            if (progress >= 1.0f)
             {
                 _dmPaneAnimating = false;
                 _dmPaneAnimationProgress = shouldShowDMPane ? 1f : 0f;
@@ -781,95 +776,87 @@ public sealed class ChatLogWindow : Window
                 var tabIndex = dmTabInfo.index;
                 
                 var unread = dmTab.Unread == 0 ? "" : $" •{dmTab.Unread}";
-                var tabLabel = $"💬 {dmTab.Player.Name}{unread}";
+                // Add visual indicator when pane is expanded
+                var paneIndicator = (Plugin.LastTab == tabIndex && !_dmPaneCollapsed) ? " ▼" : "";
+                var tabLabel = $"💬 {dmTab.Player.Name}{unread}{paneIndicator}";
                 
                 // Check if this is the active DM tab
                 var isActiveDMTab = Plugin.LastTab == tabIndex;
                 var flags = ImGuiTabItemFlags.None;
                 
-                // Add visual indicator for active DM tab with pane
+                // Add visual styling for active DM tab with expanded pane
                 if (isActiveDMTab && !_dmPaneCollapsed)
                 {
-                    // Add a subtle glow or different styling for the connected tab
+                    // Add a subtle highlight for the connected tab
                     using var colorPush = ImRaii.PushColor(ImGuiCol.TabActive, 
-                        ImGui.GetColorU32(ImGuiCol.TabActive) | 0xFF000020); // Slight blue tint
+                        ImGui.GetColorU32(ImGuiCol.TabActive) | 0x20000000); // Slight highlight
                 }
                 
                 using var tabItem = ImRaii.TabItem($"{tabLabel}###dm-tab-{tabIndex}", flags);
                 
+                // Only handle click when tab is clicked, not when it's just active
+                var wasClicked = ImGui.IsItemClicked(ImGuiMouseButton.Left);
+                
                 if (tabItem.Success)
                 {
                     var hasTabSwitched = Plugin.LastTab != tabIndex;
-                    Plugin.LastTab = tabIndex;
                     
-                    // Auto-expand DM pane when clicking DM tab (only if currently collapsed AND not manually collapsed)
-                    // OR when switching to a different DM tab (reset manual collapse on tab switch)
-                    if (_dmPaneCollapsed && (!_dmPaneManuallyCollapsed || hasTabSwitched))
+                    // Only process click logic when actually clicked, not just when active
+                    if (wasClicked)
                     {
-                        _dmPaneCollapsed = false;
-                        _dmPaneManuallyCollapsed = false; // Reset manual collapse flag when expanding
-                        _dmPaneAnimating = true;
-                        _dmPaneAnimationStartTime = Environment.TickCount64;
+                        Plugin.LastTab = tabIndex;
+                        
+                        // Toggle DM pane when clicking the tab (if it's already the active tab)
+                        // Auto-expand when switching to a different DM tab
+                        if (!hasTabSwitched && isActiveDMTab)
+                        {
+                            // Toggle pane visibility when clicking the already active tab
+                            _dmPaneCollapsed = !_dmPaneCollapsed;
+                            _dmPaneManuallyCollapsed = _dmPaneCollapsed;
+                            _dmPaneAnimating = true;
+                            _dmPaneAnimationStartTime = Environment.TickCount64;
+                        }
+                        else if (hasTabSwitched)
+                        {
+                            // Auto-expand when switching to a different DM tab
+                            _dmPaneCollapsed = false;
+                            _dmPaneManuallyCollapsed = false;
+                            _dmPaneAnimating = true;
+                            _dmPaneAnimationStartTime = Environment.TickCount64;
+                        }
+                        
+                        if (hasTabSwitched)
+                        {
+                            var previousTab = Plugin.Config.Tabs.ElementAtOrDefault(Plugin.LastTab);
+                            if (previousTab != null)
+                                TabSwitched(dmTab, previousTab);
+                        }
+                        
+                        // Clear unread for this DM tab
+                        dmTab.Unread = 0;
+                        dmTab.MarkAsRead();
                     }
-                    
-                    if (hasTabSwitched)
+                    else if (Plugin.LastTab != tabIndex)
                     {
-                        var previousTab = Plugin.Config.Tabs.ElementAtOrDefault(Plugin.LastTab);
-                        if (previousTab != null)
-                            TabSwitched(dmTab, previousTab);
+                        // Ensure the tab is set as active even without click (for programmatic switching)
+                        Plugin.LastTab = tabIndex;
                     }
-                    
-                    // Clear unread for this DM tab
-                    dmTab.Unread = 0;
-                    dmTab.MarkAsRead();
+                }
+                
+                // Add tooltip to explain click behavior
+                if (ImGui.IsItemHovered())
+                {
+                    var tooltipText = isActiveDMTab 
+                        ? (_dmPaneCollapsed ? "Click to show conversation" : "Click to hide conversation")
+                        : "Click to switch to this conversation";
+                    ModernUI.DrawModernTooltip(tooltipText, Plugin.Config);
                 }
                 
                 // Add context menu for DM tabs
                 DrawDMTabContextMenu(dmTab, tabIndex);
             }
             
-            // Add collapse/expand button at the end of DM tab row if there's an active DM tab
-            var activeDMTab = GetActiveDMTab();
-            if (activeDMTab != null)
-            {
-                ImGui.SameLine();
-                ImGui.Spacing();
-                ImGui.SameLine();
-                
-                using (ModernUI.PushModernButtonStyle(Plugin.Config))
-                {
-                    // Button should only show "Collapse" when pane is visible, always show "Expand" when collapsed
-                    var isPaneVisible = !_dmPaneCollapsed && _dmPaneAnimationProgress > 0.1f;
-                    var buttonText = isPaneVisible ? "▲ Hide" : "▼ Show";
-                    
-                    if (ImGui.SmallButton(buttonText))
-                    {
-                        if (_dmPaneCollapsed)
-                        {
-                            // User wants to expand - clear manual collapse flag and expand
-                            _dmPaneCollapsed = false;
-                            _dmPaneManuallyCollapsed = false;
-                        }
-                        else
-                        {
-                            // User wants to collapse - set manual collapse flag and collapse
-                            _dmPaneCollapsed = true;
-                            _dmPaneManuallyCollapsed = true;
-                        }
-                        
-                        _dmPaneAnimating = true;
-                        _dmPaneAnimationStartTime = Environment.TickCount64;
-                    }
-                }
-                
-                // Add tooltip
-                if (ImGui.IsItemHovered())
-                {
-                    var isPaneVisible = !_dmPaneCollapsed && _dmPaneAnimationProgress > 0.1f;
-                    var tooltipText = isPaneVisible ? "Hide DM conversation" : "Show DM conversation";
-                    ModernUI.DrawModernTooltip(tooltipText, Plugin.Config);
-                }
-            }
+            // DM tabs are clickable to toggle the pane - no separate button needed
         }
     }
 
