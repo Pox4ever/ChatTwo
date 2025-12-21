@@ -33,6 +33,7 @@ public sealed class PayloadHandler
 
     private ChatLogWindow LogWindow { get; }
     private (Chunk, Payload?)? Popup { get; set; }
+    private bool ShouldOpenPopup { get; set; }
 
     public bool HandleTooltips;
     public uint HoveredItem;
@@ -62,9 +63,18 @@ public sealed class PayloadHandler
     private void DrawPopups()
     {
         if (Popup == null)
+        {
             return;
+        }
 
         var (chunk, payload) = Popup.Value;
+
+        // Open the popup at parent window level only when flag is set
+        if (ShouldOpenPopup)
+        {
+            ImGui.OpenPopup(PopupId);
+            ShouldOpenPopup = false; // Reset flag after opening
+        }
 
         using var popup = ImRaii.Popup(PopupId);
         if (!popup.Success)
@@ -488,7 +498,7 @@ public sealed class PayloadHandler
     private void RightClickPayload(Chunk chunk, Payload? payload)
     {
         Popup = (chunk, payload);
-        ImGui.OpenPopup(PopupId);
+        ShouldOpenPopup = true;
     }
 
     private void DrawItemPopup(ItemPayload payload)

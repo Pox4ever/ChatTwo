@@ -76,7 +76,13 @@ public sealed class Plugin : IDalamudPlugin
         get
         {
             var i = LastTab;
-            return i > -1 && i < Config.Tabs.Count ? Config.Tabs[i] : new Tab();
+            if (i > -1 && i < Config.Tabs.Count)
+                return Config.Tabs[i];
+            
+            // Return a properly initialized fallback tab
+            var fallbackTab = new Tab();
+            fallbackTab.CurrentChannel = new UsedChannel();
+            return fallbackTab;
         }
     }
 

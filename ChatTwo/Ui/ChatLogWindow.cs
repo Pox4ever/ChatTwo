@@ -447,6 +447,7 @@ public sealed class ChatLogWindow : Window
     public override unsafe void PreOpenCheck()
     {
         Flags = ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse | ImGuiWindowFlags.NoFocusOnAppearing;
+        
         if (!Plugin.Config.CanMove)
             Flags |= ImGuiWindowFlags.NoMove;
 
@@ -486,29 +487,6 @@ public sealed class ChatLogWindow : Window
 
     public override void PreDraw()
     {
-        // CRITICAL: Completely disable focus management to prevent context menu interference
-        // The aggressive focus management was causing context menus to close immediately
-        // due to focus fighting between Chat 2 window and Dalamud Console
-        // 
-        // Original issue: Right-click opens context menu, but focus switching immediately closes it
-        // Solution: Don't set window focus at all - let ImGui handle focus naturally
-        
-        // Only set focus in very specific cases where we absolutely need it
-        // and we're certain it won't interfere with context menus
-        var shouldSetFocus = Plugin.Config.KeepInputFocus && 
-                           Activate && 
-                           !ImGui.IsPopupOpen("", ImGuiPopupFlags.AnyPopupId) &&
-                           !ImGui.IsAnyMouseDown() && // Don't set focus if mouse is being used (potential right-click)
-                           GetActiveDMTab() == null; // Don't set focus when DM tabs are active
-        
-        if (shouldSetFocus)
-        {
-            // Additional safety check - only set focus if no window has focus
-            // This prevents stealing focus from other windows
-            if (ImGui.GetIO().WantCaptureMouse == false)
-                ImGui.SetWindowFocus(WindowName);
-        }
-
         // Apply existing style first
         if (Plugin.Config is { OverrideStyle: true, ChosenStyle: not null })
             StyleModel.GetConfiguredStyles()?.FirstOrDefault(style => style.Name == Plugin.Config.ChosenStyle)?.Push();
@@ -524,11 +502,6 @@ public sealed class ChatLogWindow : Window
         // Activate gets disabled is via the text input callback, but that
         // doesn't get called if the input is disabled.
         if (Plugin.CurrentTab.InputDisabled)
-            Activate = false;
-            
-        // CRITICAL: Also reset Activate flag when DM tabs are active to prevent focus fighting
-        // This prevents the aggressive focus management from interfering with context menus
-        if (GetActiveDMTab() != null)
             Activate = false;
 
         // End modern styling
@@ -547,6 +520,7 @@ public sealed class ChatLogWindow : Window
     public override void Draw()
     {
         DrewThisFrame = true;
+        
         try
         {
             DrawChatLog();
@@ -563,6 +537,7 @@ public sealed class ChatLogWindow : Window
     }
 
     private static bool IsChatMode => Plugin.Config.PreviewPosition is PreviewPosition.Inside or PreviewPosition.Tooltip;
+    
     private unsafe void DrawChatLog()
     {
         // Position change has applied, so we set it to null again
@@ -582,38 +557,29 @@ public sealed class ChatLogWindow : Window
         if (IsChatMode && Plugin.InputPreview.IsDrawable)
             Plugin.InputPreview.CalculatePreview();
 
-        // CRITICAL TEST: Check if we have any DM tabs at all
+        // Check if we have any DM tabs at all
         var hasDMTabs = Plugin.Config.Tabs.Any(tab => !tab.PopOut && tab is DMTab);
         
         if (hasDMTabs)
         {
-            // Use the dual-row tab system only when DM tabs exist
+            // Use the dual-row tab system with proper context menu support
             DrawDualRowTabSystem();
         }
         else
         {
-            // FALLBACK: Use original chat drawing when no DM tabs exist
-            // This will help us test if the dual-row system is causing the context menu issue
-            DrawOriginalChatSystem();
+            // Use original single-row tab system when no DM tabs exist
+            DrawSingleRowTabSystem();
         }
+        
+        // CRITICAL FIX: Draw popups at parent window level to avoid child window conflicts
+        // This ensures popups work correctly even when multiple child windows are present
+        PayloadHandler.Draw();
     }
 
-    private void DrawOriginalChatSystem()
+    private void DrawSingleRowTabSystem()
     {
-        // FALLBACK: Use the original chat drawing system to test if dual-row system causes context menu issues
-        // This is the original implementation before DM tabs were added
-        
-        if (Plugin.Config.SidebarTabView)
-            DrawTabSidebar();
-        else
-            DrawTabBar();
-
-        var activeTab = Plugin.CurrentTab;
-        if (activeTab == null)
-            return;
-
-        // Draw the input area for the active tab using the regular chat input method
-        DrawRegularChatInput(activeTab);
+        // Original chat drawing system when no DM tabs exist - includes input field
+        DrawNormalChatPane();
     }
 
     // Add fields to track DM pane state and animation
@@ -656,10 +622,11 @@ public sealed class ChatLogWindow : Window
             DrawDMPane(activeDMTab, animatedDMPaneHeight);
         }
         
-        // Calculate remaining height for regular chat area after DM pane
+        // CRITICAL FIX: Calculate remaining height AFTER DM pane to prevent overlap
+        // This ensures the regular chat area is positioned below the DM pane, not overlapping
         var remainingHeight = ImGui.GetContentRegionAvail().Y;
         
-        // Draw regular chat area with the remaining space
+        // Draw regular chat area with the remaining space (positioned below DM pane)
         DrawRegularChatArea(remainingHeight);
     }
 
@@ -711,9 +678,6 @@ public sealed class ChatLogWindow : Window
 
     private void DrawRegularChatArea(float availableHeight)
     {
-        // CRITICAL FIX: Don't use child window for regular chat area as it interferes with context menus
-        // The nested child windows were blocking right-click events from reaching the message area
-        
         // Draw regular tabs right above the chat content
         DrawRegularTabRow();
         
@@ -734,7 +698,8 @@ public sealed class ChatLogWindow : Window
             inputHeight = remainingHeight - messageHeight;
         }
         
-        // Draw message log for the active regular tab - NO CHILD WINDOW to avoid blocking context menus
+        // CRITICAL FIX: Draw message log directly without child window to avoid blocking context menus
+        // The nested child windows were blocking right-click events from reaching the message area
         DrawMessageLog(activeRegularTab, PayloadHandler, messageHeight, false);
 
         // Draw channel name
@@ -1020,7 +985,8 @@ public sealed class ChatLogWindow : Window
             );
         }
         
-        using (var dmChild = ImRaii.Child("##dm-conversation", new Vector2(-1, height), true, ImGuiWindowFlags.NoScrollbar))
+        using (var dmChild = ImRaii.Child("##dm-conversation", new Vector2(-1, height), true, 
+            ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoMove))
         {
             if (dmChild.Success)
             {
@@ -1080,23 +1046,24 @@ public sealed class ChatLogWindow : Window
                 using var sepAlpha = ImRaii.PushStyle(ImGuiStyleVar.Alpha, separatorAlpha);
                 ImGui.Separator();
 
-                // DM message area with smooth scrolling
-                var messageHeight = ImGui.GetContentRegionAvail().Y - 40; // Reserve space for input
-                using (var messageChild = ImRaii.Child("##dm-messages", new Vector2(-1, messageHeight)))
-                {
-                    if (messageChild.Success)
-                    {
-                        // Add subtle background for message area
-                        var msgBgColor = ImGui.GetColorU32(ImGuiCol.FrameBg) & 0x00FFFFFF | ((uint)(alpha * 20) << 24);
-                        drawList.AddRectFilled(
-                            ImGui.GetCursorScreenPos(),
-                            ImGui.GetCursorScreenPos() + new Vector2(ImGui.GetContentRegionAvail().X, messageHeight),
-                            msgBgColor
-                        );
-                        
-                        DrawMessageLog(activeDMTab, PayloadHandler, messageHeight, false);
-                    }
-                }
+        // DM message area with smooth scrolling - CRITICAL FIX: Add NoInputs flag to prevent blocking context menus
+        var messageHeight = ImGui.GetContentRegionAvail().Y - 40; // Reserve space for input
+        using (var messageChild = ImRaii.Child("##dm-messages", new Vector2(-1, messageHeight), false, 
+            ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoInputs))
+        {
+            if (messageChild.Success)
+            {
+                // Add subtle background for message area
+                var msgBgColor = ImGui.GetColorU32(ImGuiCol.FrameBg) & 0x00FFFFFF | ((uint)(alpha * 20) << 24);
+                drawList.AddRectFilled(
+                    ImGui.GetCursorScreenPos(),
+                    ImGui.GetCursorScreenPos() + new Vector2(ImGui.GetContentRegionAvail().X, messageHeight),
+                    msgBgColor
+                );
+                
+                DrawMessageLog(activeDMTab, PayloadHandler, messageHeight, false);
+            }
+        }
 
                 // DM input area with enhanced styling
                 DrawDMInputArea(activeDMTab, alpha);
@@ -1369,7 +1336,10 @@ public sealed class ChatLogWindow : Window
         using (ImRaii.PushColor(ImGuiCol.Text, push ? ColourUtil.RgbaToAbgr(inputColour!.Value) : 0, push))
         {
             var isChatEnabled = activeTab is { InputDisabled: false };
-            if (isChatEnabled && (Activate || FocusedPreview))
+            // CRITICAL FIX: Don't set keyboard focus when DM tabs are active to prevent focus fights
+            // This was causing the "has focus now" -> "lost focus" cycle that breaks context menus
+            var hasDMTabs = GetActiveDMTab() != null;
+            if (isChatEnabled && (Activate || FocusedPreview) && !hasDMTabs)
             {
                 FocusedPreview = false;
                 ImGui.SetKeyboardFocusHere();
@@ -1565,7 +1535,10 @@ public sealed class ChatLogWindow : Window
         using (ImRaii.PushColor(ImGuiCol.Text, push ? ColourUtil.RgbaToAbgr(inputColour!.Value) : 0, push))
         {
             var isChatEnabled = activeTab is { InputDisabled: false };
-            if (isChatEnabled && (Activate || FocusedPreview))
+            // CRITICAL FIX: Don't set keyboard focus when DM tabs are active to prevent focus fights
+            // This was causing the "has focus now" -> "lost focus" cycle that breaks context menus
+            var hasDMTabs = GetActiveDMTab() != null;
+            if (isChatEnabled && (Activate || FocusedPreview) && !hasDMTabs)
             {
                 FocusedPreview = false;
                 ImGui.SetKeyboardFocusHere();
@@ -2182,7 +2155,9 @@ public sealed class ChatLogWindow : Window
 
     internal void DrawMessageLog(Tab tab, PayloadHandler handler, float childHeight, bool switchedTab)
     {
-        using var child = ImRaii.Child("##chat2-messages", new Vector2(-1, childHeight));
+        // Use unique child window IDs to prevent conflicts between DM pane and regular chat
+        var childId = tab is DMTab ? "##chat2-dm-messages" : "##chat2-messages";
+        using var child = ImRaii.Child(childId, new Vector2(-1, childHeight));
         if (!child.Success)
             return;
 
@@ -2200,7 +2175,7 @@ public sealed class ChatLogWindow : Window
         if (switchedTab || ImGui.GetScrollY() >= ImGui.GetScrollMaxY())
             ImGui.SetScrollHereY(1f);
 
-        handler.Draw();
+        // Popup handling moved to parent window level to avoid child window conflicts
     }
 
     private void DrawLogTableStyle(Tab tab, PayloadHandler handler, bool switchedTab)
@@ -2229,7 +2204,7 @@ public sealed class ChatLogWindow : Window
                 if (switchedTab || ImGui.GetScrollY() + cellPaddingOffset >= ImGui.GetScrollMaxY())
                     ImGui.SetScrollHereY(1f);
 
-                handler.Draw();
+                // Popup handling moved to parent window level to avoid child window conflicts
             }
         }
     }

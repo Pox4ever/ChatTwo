@@ -54,8 +54,12 @@ internal static class ImGuiUtil
             return;
 
         foreach (var button in Buttons)
+        {
             if (ImGui.IsItemClicked(button))
+            {
                 handler.Click(chunk, payload, button);
+            }
+        }
     }
 
     internal static unsafe void WrapText(string csText, Chunk chunk, PayloadHandler? handler, Vector4 defaultText, float lineWidth)
