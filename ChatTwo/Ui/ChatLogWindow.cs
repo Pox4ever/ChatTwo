@@ -645,6 +645,10 @@ public sealed class ChatLogWindow : Window
     private float _lastDMPaneHeight = 0f;
     private float _lastAnimationProgress = -1f; // Track animation progress changes
     private bool _userIsDragging = false; // Track if user is dragging the window
+    
+    // DM pane resizing state
+    private float _dmPaneHeightRatio = 0.4f; // Default to 40% of window height
+    private Vector2 _lastWindowSizeForDMPane = Vector2.Zero; // Track window size changes for DM pane scaling
 
     private void HandleWindowExpansion(bool shouldShowDMPane, float animatedHeight)
     {
@@ -653,31 +657,69 @@ public sealed class ChatLogWindow : Window
                          ImGui.IsMouseHoveringRect(ImGui.GetWindowPos(), 
                          ImGui.GetWindowPos() + new Vector2(ImGui.GetWindowSize().X, 30)); // Title bar area
         
+        // Track current window state
+        var currentWindowSize = ImGui.GetWindowSize();
+        var currentWindowPos = ImGui.GetWindowPos();
+        
         // Expand window upward when showing DM pane
         if (shouldShowDMPane && !_hasStoredOriginalWindow && animatedHeight > 10.0f)
         {
-            _originalWindowSize = ImGui.GetWindowSize();
-            _originalWindowPos = ImGui.GetWindowPos();
+            _originalWindowSize = currentWindowSize;
+            _originalWindowPos = currentWindowPos;
             _hasStoredOriginalWindow = true;
             _lastAnimationProgress = _dmPaneAnimationProgress;
+            _lastWindowSizeForDMPane = currentWindowSize;
+            
+            // Initialize the DM pane height ratio based on current calculation
+            var currentWindowHeight = _originalWindowSize.Y;
+            _dmPaneHeightRatio = Math.Max(0.2f, Math.Min(0.7f, animatedHeight / currentWindowHeight));
+        }
+        
+        // Detect if user resized the window while DM pane is open
+        if (_hasStoredOriginalWindow && !_userIsDragging && !_dmPaneAnimating)
+        {
+            // Check if window size changed (user resized)
+            if (_lastWindowSizeForDMPane != currentWindowSize)
+            {
+                // Calculate the difference in size
+                var sizeDelta = currentWindowSize - _lastWindowSizeForDMPane;
+                
+                // Update the stored original size to reflect the user's new preference
+                // The original size should be what the window would be WITHOUT the DM pane
+                var baseDMPaneHeight = _originalWindowSize.Y * _dmPaneHeightRatio;
+                var currentExpansion = baseDMPaneHeight * _dmPaneAnimationProgress;
+                
+                // The new "original" size is the current size minus the current DM expansion
+                _originalWindowSize = new Vector2(currentWindowSize.X, currentWindowSize.Y - currentExpansion);
+                
+                // Update position if the window moved up due to resizing
+                if (sizeDelta.Y != 0)
+                {
+                    // If the window got taller, we need to adjust the original position
+                    _originalWindowPos = new Vector2(currentWindowPos.X, currentWindowPos.Y + currentExpansion);
+                }
+                
+                _lastWindowSizeForDMPane = currentWindowSize;
+                
+                Plugin.Log.Debug($"DM pane: User resized window, updated original size to {_originalWindowSize}, pos to {_originalWindowPos}");
+            }
         }
         
         // Only adjust window size when animation progress changes AND user is not dragging
         if (_hasStoredOriginalWindow && !_userIsDragging && 
             Math.Abs(_dmPaneAnimationProgress - _lastAnimationProgress) > 0.01f)
         {
-            // Use current window size for more responsive behavior
-            var currentWindowSize = ImGui.GetWindowSize();
-            var baseDMPaneHeight = currentWindowSize.Y * 0.4f; // 40% of current window height
+            // Use stored ratio for consistent behavior
+            var baseDMPaneHeight = _originalWindowSize.Y * _dmPaneHeightRatio;
             var currentExpansion = baseDMPaneHeight * _dmPaneAnimationProgress;
             
-            // Calculate new window size and position based on current size
+            // Calculate new window size and position based on original state
             var newHeight = _originalWindowSize.Y + currentExpansion;
             var newY = _originalWindowPos.Y - currentExpansion;
             
-            // Apply the changes only when animation progress changes
+            // Apply the changes smoothly
             ImGui.SetWindowPos(new Vector2(_originalWindowPos.X, newY));
-            ImGui.SetWindowSize(new Vector2(currentWindowSize.X, newHeight)); // Preserve width changes
+            ImGui.SetWindowSize(new Vector2(_originalWindowSize.X, newHeight));
             
             _lastAnimationProgress = _dmPaneAnimationProgress;
         }
@@ -685,13 +727,13 @@ public sealed class ChatLogWindow : Window
         // Update original position if user dragged the window
         if (_userIsDragging && _hasStoredOriginalWindow)
         {
-            var currentPos = ImGui.GetWindowPos();
-            var currentWindowSize = ImGui.GetWindowSize();
-            var baseDMPaneHeight = currentWindowSize.Y * 0.4f; // Use current window size
+            var baseDMPaneHeight = _originalWindowSize.Y * _dmPaneHeightRatio;
             var currentExpansion = baseDMPaneHeight * _dmPaneAnimationProgress;
             
             // Update the original position based on current position and expansion
-            _originalWindowPos = new Vector2(currentPos.X, currentPos.Y + currentExpansion);
+            _originalWindowPos = new Vector2(currentWindowPos.X, currentWindowPos.Y + currentExpansion);
+            
+            Plugin.Log.Debug($"DM pane: User dragged window, updated original pos to {_originalWindowPos}");
         }
         
         // Reset to original only when animation is completely finished AND pane is hidden
@@ -700,7 +742,9 @@ public sealed class ChatLogWindow : Window
             ImGui.SetWindowPos(_originalWindowPos);
             ImGui.SetWindowSize(_originalWindowSize);
             _hasStoredOriginalWindow = false;
-            _lastAnimationProgress = -1f; // Reset animation progress tracking
+            _lastAnimationProgress = -1f;
+            
+            Plugin.Log.Debug($"DM pane: Restored to final size {_originalWindowSize}, pos {_originalWindowPos}");
         }
         
         _lastDMPaneHeight = animatedHeight;
