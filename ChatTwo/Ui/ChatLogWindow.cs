@@ -4,6 +4,7 @@ using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Text;
 using ChatTwo.Code;
+using ChatTwo.DM;
 using ChatTwo.GameFunctions;
 using ChatTwo.GameFunctions.Types;
 using ChatTwo.Resources;
@@ -575,36 +576,43 @@ public sealed class ChatLogWindow : Window
             DrawChannelName(activeTab);
         }
 
+        // Hide channel selector for DM tabs - they always send tells
+        var isDMTab = activeTab is DMTab;
+        
         var beforeIcon = ImGui.GetCursorPos();
-        using (ModernUI.PushModernButtonStyle(Plugin.Config))
+        if (!isDMTab)
         {
-            if (ImGuiUtil.IconButton(FontAwesomeIcon.Comment) && activeTab.Channel is null)
-                ImGui.OpenPopup(ChatChannelPicker);
-        }
-
-        if (activeTab.Channel is not null && ImGui.IsItemHovered())
-            ModernUI.DrawModernTooltip(Language.ChatLog_SwitcherDisabled, Plugin.Config);
-
-        using (var popup = ImRaii.Popup(ChatChannelPicker))
-        {
-            if (popup)
+            using (ModernUI.PushModernButtonStyle(Plugin.Config))
             {
-                var channels = GetValidChannels();
-                foreach (var (name, channel) in channels)
-                    if (ImGui.Selectable(name))
-                        SetChannel(channel);
+                if (ImGuiUtil.IconButton(FontAwesomeIcon.Comment) && activeTab.Channel is null)
+                    ImGui.OpenPopup(ChatChannelPicker);
             }
-        }
 
-        ImGui.SameLine();
+            if (activeTab.Channel is not null && ImGui.IsItemHovered())
+                ModernUI.DrawModernTooltip(Language.ChatLog_SwitcherDisabled, Plugin.Config);
+
+            using (var popup = ImRaii.Popup(ChatChannelPicker))
+            {
+                if (popup)
+                {
+                    var channels = GetValidChannels();
+                    foreach (var (name, channel) in channels)
+                        if (ImGui.Selectable(name))
+                            SetChannel(channel);
+                }
+            }
+
+            ImGui.SameLine();
+        }
         var afterIcon = ImGui.GetCursorPos();
 
-        var buttonWidth = afterIcon.X - beforeIcon.X;
+        var buttonWidth = isDMTab ? 0 : afterIcon.X - beforeIcon.X;
         var showNovice = Plugin.Config.ShowNoviceNetwork && GameFunctions.GameFunctions.IsMentor();
         var buttonsRight = (showNovice ? 1 : 0) + (Plugin.Config.ShowHideButton ? 1 : 0);
-        var inputWidth = ImGui.GetContentRegionAvail().X - buttonWidth * (1 + buttonsRight);
+        var inputWidth = ImGui.GetContentRegionAvail().X - buttonWidth * (isDMTab ? 0 : (1 + buttonsRight));
 
-        var inputType = activeTab.CurrentChannel.UseTempChannel ? activeTab.CurrentChannel.TempChannel.ToChatType() : activeTab.CurrentChannel.Channel.ToChatType();
+        // For DM tabs, always use TellOutgoing color
+        var inputType = isDMTab ? ChatType.TellOutgoing : (activeTab.CurrentChannel.UseTempChannel ? activeTab.CurrentChannel.TempChannel.ToChatType() : activeTab.CurrentChannel.Channel.ToChatType());
         var isCommand = Chat.Trim().StartsWith('/');
         if (isCommand)
         {
@@ -647,7 +655,10 @@ public sealed class ChatLogWindow : Window
                 using (styleScope)
                 using (colorScope)
                 {
-                    var placeholder = isChatEnabled ? "Type your message..." : Language.ChatLog_DisabledInput;
+                    // Different placeholder for DM tabs to indicate direct messaging
+                    var placeholder = isChatEnabled 
+                        ? (isDMTab && activeTab is DMTab dmTab ? $"Message {dmTab.Player.TabName}..." : "Type your message...") 
+                        : Language.ChatLog_DisabledInput;
                     ImGui.InputTextWithHint("##chat2-input", placeholder, ref Chat, 500, flags, Callback);
                 }
             }
@@ -971,6 +982,151 @@ public sealed class ChatLogWindow : Window
             AddBacklog(trimmed);
             InputBacklogIdx = -1;
 
+            // Handle DM tabs specially - always send as tells to the target player
+            if (activeTab is DMTab dmTab)
+            {
+                try
+                {
+                    Plugin.Log.Debug($"SendChatBox: Handling DM tab message to {dmTab.Player.DisplayName}: '{trimmed}'");
+                    
+                    if (trimmed.StartsWith('/'))
+                    {
+                        Plugin.Log.Debug($"SendChatBox: Sending command directly: {trimmed}");
+                        // Commands are sent as-is (not as tells)
+                        ChatBox.SendMessage(trimmed);
+                    }
+                    else
+                    {
+                        // Non-command messages are sent as tells to the DM target
+                        var tellCommand = $"/tell {dmTab.Player.DisplayName} {trimmed}";
+                        Plugin.Log.Debug($"SendChatBox: Sending tell command: {tellCommand}");
+                        
+                        // CRITICAL: Track this outgoing tell BEFORE sending for error message routing
+                        Plugin.Log.Debug($"SendChatBox: Tracking outgoing tell to {dmTab.Player.DisplayName}");
+                        Plugin.DMMessageRouter.TrackOutgoingTell(dmTab.Player);
+                        Plugin.Log.Debug($"SendChatBox: Outgoing tell tracked successfully");
+                        
+                        // Send the tell command - the game will echo it back as TellOutgoing
+                        ChatBox.SendMessage(tellCommand);
+                        Plugin.Log.Debug($"SendChatBox: Tell command sent successfully");
+                        
+                        // NOTE: We don't display the outgoing message here because the game
+                        // will echo the tell back as a TellOutgoing message which will be
+                        // processed by DMMessageRouter.ProcessIncomingMessage() and displayed properly
+                        // with the correct sender name format
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Plugin.Log.Error($"SendChatBox: Failed to send DM message to {dmTab.Player}: {ex.Message}");
+                    Plugin.Log.Error($"SendChatBox: Stack trace: {ex.StackTrace}");
+                    DisplayErrorMessageInTab(dmTab, $"Failed to send message: {GetUserFriendlyErrorMessage(ex)}");
+                }
+                
+                Chat = string.Empty;
+                return;
+            }
+
+            // AUTO-CREATE DM TAB: Check if this is a /tell command from main chat
+            if (trimmed.StartsWith("/tell ", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    Plugin.Log.Debug($"SendChatBox: Detected /tell command from main chat: '{trimmed}'");
+                    
+                    // Parse: /tell PlayerName@World message or /tell PlayerName message
+                    // Handle player names with spaces by looking for @ symbol or using a more sophisticated approach
+                    var tellContent = trimmed.Substring(6); // Remove "/tell "
+                    
+                    string targetName;
+                    string message;
+                    
+                    // Check if there's an @ symbol (indicating world name)
+                    var atIndex = tellContent.IndexOf('@');
+                    if (atIndex != -1)
+                    {
+                        // Find the space after the world name
+                        var spaceAfterWorld = tellContent.IndexOf(' ', atIndex);
+                        if (spaceAfterWorld != -1)
+                        {
+                            targetName = tellContent.Substring(0, spaceAfterWorld);
+                            message = tellContent.Substring(spaceAfterWorld + 1);
+                        }
+                        else
+                        {
+                            // No message, just the target name
+                            targetName = tellContent;
+                            message = "";
+                        }
+                    }
+                    else
+                    {
+                        // No @ symbol, so we need to guess where the player name ends
+                        // This is tricky because player names can have spaces
+                        // For now, assume the last word is the message and everything before is the player name
+                        var lastSpaceIndex = tellContent.LastIndexOf(' ');
+                        if (lastSpaceIndex != -1)
+                        {
+                            targetName = tellContent.Substring(0, lastSpaceIndex);
+                            message = tellContent.Substring(lastSpaceIndex + 1);
+                        }
+                        else
+                        {
+                            // No spaces, so it's just the target name with no message
+                            targetName = tellContent;
+                            message = "";
+                        }
+                    }
+                    
+                    Plugin.Log.Debug($"SendChatBox: Parsed tell - target: '{targetName}', message: '{message}'");
+                    
+                    // Try to parse the player name and create a DMPlayer
+                    var targetPlayer = ParsePlayerNameWithWorld(targetName);
+                    if (targetPlayer != null)
+                    {
+                        Plugin.Log.Debug($"SendChatBox: Successfully parsed target player: {targetPlayer.DisplayName}");
+                        
+                        // Check if we already have a DM tab for this player using DMManager
+                        var dmManager = DMManager.Instance;
+                        if (!dmManager.HasOpenDMTab(targetPlayer))
+                        {
+                            Plugin.Log.Debug($"SendChatBox: No existing DM tab found, creating new tab for {targetPlayer.DisplayName}");
+                            
+                            // Use DMManager to properly create and register the DM tab
+                            var newDMTab = dmManager.OpenDMTab(targetPlayer);
+                            if (newDMTab != null)
+                            {
+                                Plugin.Log.Info($"SendChatBox: Auto-created DM tab for {targetPlayer.DisplayName}");
+                            }
+                            else
+                            {
+                                Plugin.Log.Error($"SendChatBox: Failed to create DM tab for {targetPlayer.DisplayName}");
+                            }
+                        }
+                        else
+                        {
+                            Plugin.Log.Debug($"SendChatBox: DM tab already exists for {targetPlayer.DisplayName}");
+                        }
+                        
+                        // Track this outgoing tell for error message routing
+                        Plugin.Log.Debug($"SendChatBox: Tracking outgoing tell to {targetPlayer.DisplayName}");
+                        Plugin.DMMessageRouter.TrackOutgoingTell(targetPlayer);
+                        Plugin.Log.Debug($"SendChatBox: Outgoing tell tracked successfully");
+                    }
+                    else
+                    {
+                        Plugin.Log.Warning($"SendChatBox: Could not parse target player from '{targetName}'");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Plugin.Log.Error($"SendChatBox: Failed to process /tell command for auto-tab creation: {ex.Message}");
+                    Plugin.Log.Error($"SendChatBox: Stack trace: {ex.StackTrace}");
+                }
+                
+                // Continue with normal tell processing - don't return here
+            }
+
             if (TellSpecial)
             {
                 var tellBytes = Encoding.UTF8.GetBytes(trimmed);
@@ -1038,9 +1194,137 @@ public sealed class ChatLogWindow : Window
         Chat = string.Empty;
     }
 
+    /// <summary>
+    /// Displays an outgoing message in a DM tab with appropriate styling.
+    /// </summary>
+    private void DisplayOutgoingMessageInTab(DMTab dmTab, string messageContent)
+    {
+        try
+        {
+            // Create a fake outgoing tell message for display
+            var outgoingMessage = Message.FakeMessage(
+                new List<Chunk>
+                {
+                    new TextChunk(ChunkSource.None, null, $">> {messageContent}")
+                },
+                new ChatCode((ushort)ChatType.TellOutgoing)
+            );
+            
+            // Add to both the tab and history
+            dmTab.AddMessage(outgoingMessage, unread: false);
+            dmTab.History.AddMessage(outgoingMessage, isIncoming: false);
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to display outgoing message in DM tab: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Displays an error message in a DM tab.
+    /// </summary>
+    private void DisplayErrorMessageInTab(DMTab dmTab, string errorText)
+    {
+        try
+        {
+            var errorMessage = Message.FakeMessage(
+                new List<Chunk>
+                {
+                    new TextChunk(ChunkSource.None, null, errorText)
+                },
+                new ChatCode((ushort)ChatType.Error)
+            );
+            
+            dmTab.AddMessage(errorMessage, unread: false);
+            dmTab.History.AddMessage(errorMessage, isIncoming: false);
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to display error message in DM tab: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Converts technical exceptions to user-friendly error messages.
+    /// </summary>
+    private string GetUserFriendlyErrorMessage(Exception ex)
+    {
+        return ex.Message switch
+        {
+            var msg when msg.Contains("message is empty") => "Cannot send empty message",
+            var msg when msg.Contains("message is longer than 500 bytes") => "Message is too long (max 500 characters)",
+            var msg when msg.Contains("message contained invalid characters") => "Message contains invalid characters",
+            _ => "Unable to send message. Please try again."
+        };
+    }
+
     internal void UserHide()
     {
         CurrentHideState = HideState.User;
+    }
+
+    /// <summary>
+    /// Parses a player name that may include world information for auto-tab creation.
+    /// </summary>
+    /// <param name="playerNameWithWorld">Player name potentially with @World suffix</param>
+    /// <returns>DMPlayer instance or null if parsing fails</returns>
+    private DMPlayer? ParsePlayerNameWithWorld(string playerNameWithWorld)
+    {
+        try
+        {
+            Plugin.Log.Debug($"ParsePlayerNameWithWorld: Parsing '{playerNameWithWorld}'");
+            
+            if (playerNameWithWorld.Contains('@'))
+            {
+                var parts = playerNameWithWorld.Split('@');
+                if (parts.Length == 2)
+                {
+                    var playerName = parts[0];
+                    var worldName = parts[1];
+                    
+                    Plugin.Log.Debug($"ParsePlayerNameWithWorld: Player='{playerName}', World='{worldName}'");
+                    
+                    // Try to find the world ID from the world name
+                    var worldSheet = Sheets.WorldSheet;
+                    if (worldSheet != null)
+                    {
+                        var world = worldSheet.FirstOrDefault(w => 
+                            string.Equals(w.Name.ToString(), worldName, StringComparison.OrdinalIgnoreCase));
+                        
+                        if (world.RowId != 0)
+                        {
+                            Plugin.Log.Debug($"ParsePlayerNameWithWorld: Found world ID {world.RowId} for '{worldName}'");
+                            return new DMPlayer(playerName, world.RowId);
+                        }
+                        else
+                        {
+                            Plugin.Log.Warning($"ParsePlayerNameWithWorld: Could not find world ID for '{worldName}'");
+                        }
+                    }
+                }
+            }
+            else
+            {
+                // No world specified, use current player's world
+                var currentWorld = Plugin.ClientState.LocalPlayer?.HomeWorld.RowId ?? 0;
+                if (currentWorld != 0)
+                {
+                    Plugin.Log.Debug($"ParsePlayerNameWithWorld: Using current world {currentWorld} for '{playerNameWithWorld}'");
+                    return new DMPlayer(playerNameWithWorld, currentWorld);
+                }
+                else
+                {
+                    Plugin.Log.Warning($"ParsePlayerNameWithWorld: Could not determine current world for '{playerNameWithWorld}'");
+                }
+            }
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"ParsePlayerNameWithWorld: Failed to parse player name '{playerNameWithWorld}': {ex.Message}");
+            return null;
+        }
     }
 
     internal void DrawMessageLog(Tab tab, PayloadHandler handler, float childHeight, bool switchedTab)
@@ -1291,6 +1575,15 @@ public sealed class ChatLogWindow : Window
                     : Plugin.Config.ModernUIEnabled 
                         ? $" •{tab.Unread}" 
                         : $" ({tab.Unread})";
+
+                // For DM tabs, use their custom display name which includes unread indicators
+                var tabName = tab.Name;
+                if (tab is DMTab dmTab)
+                {
+                    // DM tabs handle their own unread indicators, so we don't add the standard unread suffix
+                    tabName = dmTab.GetDisplayName();
+                    unread = ""; // Clear the standard unread indicator since DM tabs handle it themselves
+                }
                         
                 var flags = ImGuiTabItemFlags.None;
                 if (Plugin.WantedTab == tabI)
@@ -1306,11 +1599,11 @@ public sealed class ChatLogWindow : Window
                 }
 
                 // Create tab label with optional icon
-                var tabLabel = tab.Name + unread;
+                var tabLabel = tabName + unread;
                 if (Plugin.Config.ModernUIEnabled && Plugin.Config.ShowTabIcons)
                 {
                     var icon = ModernUI.GetTabIcon(tab);
-                    tabLabel = $"{icon.ToIconString()} {tab.Name}{unread}";
+                    tabLabel = $"{icon.ToIconString()} {tabName}{unread}";
                 }
 
                 using var tabItem = ImRaii.TabItem($"{tabLabel}###log-tab-{tabI}", flags);
@@ -1334,7 +1627,13 @@ public sealed class ChatLogWindow : Window
                 if (hasTabSwitched)
                     TabSwitched(tab, previousTab);
 
+                // Clear unread indicators - for DM tabs, also clear the DM history unread count
                 tab.Unread = 0;
+                if (tab is DMTab dmTabForClear)
+                {
+                    dmTabForClear.MarkAsRead();
+                }
+                
                 DrawMessageLog(tab, PayloadHandler, GetRemainingHeightForMessageLog(), hasTabSwitched);
             }
 
@@ -1370,12 +1669,21 @@ public sealed class ChatLogWindow : Window
 
                     var unread = tabI == Plugin.LastTab || tab.UnreadMode == UnreadMode.None || tab.Unread == 0 ? "" : $" ({tab.Unread})";
                     
+                    // For DM tabs, use their custom display name which includes unread indicators
+                    var tabName = tab.Name;
+                    if (tab is DMTab dmTab)
+                    {
+                        // DM tabs handle their own unread indicators, so we don't add the standard unread suffix
+                        tabName = dmTab.GetDisplayName();
+                        unread = ""; // Clear the standard unread indicator since DM tabs handle it themselves
+                    }
+                    
                     // Create tab label with optional icon for sidebar
-                    var tabLabel = tab.Name + unread;
+                    var tabLabel = tabName + unread;
                     if (Plugin.Config.ModernUIEnabled && Plugin.Config.ShowTabIcons)
                     {
                         var icon = ModernUI.GetTabIcon(tab);
-                        tabLabel = $"{icon.ToIconString()} {tab.Name}{unread}";
+                        tabLabel = $"{icon.ToIconString()} {tabName}{unread}";
                     }
                     
                     var clicked = ImGui.Selectable($"{tabLabel}###log-tab-{tabI}", Plugin.LastTab == tabI || Plugin.WantedTab == tabI);
@@ -1411,7 +1719,14 @@ public sealed class ChatLogWindow : Window
         if (currentTab == -1 && Plugin.LastTab < Plugin.Config.Tabs.Count)
         {
             currentTab = Plugin.LastTab;
-            Plugin.Config.Tabs[currentTab].Unread = 0;
+            var tab = Plugin.Config.Tabs[currentTab];
+            tab.Unread = 0;
+            
+            // For DM tabs, also clear the DM history unread count
+            if (tab is DMTab dmTabForClear)
+            {
+                dmTabForClear.MarkAsRead();
+            }
         }
 
         if (currentTab > -1)
@@ -1428,6 +1743,8 @@ public sealed class ChatLogWindow : Window
 
         var anyChanged = false;
         var tabs = Plugin.Config.Tabs;
+        var isDMTab = tab is DMTab;
+        var dmTab = tab as DMTab;
 
         ImGui.SetNextItemWidth(250f * ImGuiHelpers.GlobalScale);
         if (ImGui.InputText("##tab-name", ref tab.Name, 128))
@@ -1435,9 +1752,16 @@ public sealed class ChatLogWindow : Window
 
         if (ImGuiUtil.IconButton(FontAwesomeIcon.TrashAlt, tooltip: Language.ChatLog_Tabs_Delete))
         {
-            tabs.RemoveAt(i);
+            // For DM tabs, use DMManager to properly close them
+            if (isDMTab && dmTab != null)
+            {
+                DMManager.Instance.CloseDMTab(dmTab.Player);
+            }
+            else
+            {
+                tabs.RemoveAt(i);
+            }
             Plugin.WantedTab = 0;
-
             anyChanged = true;
         }
 
@@ -1466,10 +1790,71 @@ public sealed class ChatLogWindow : Window
         }
 
         ImGui.SameLine();
-        if (ImGuiUtil.IconButton(FontAwesomeIcon.WindowRestore, tooltip: Language.ChatLog_Tabs_PopOut))
+
+        // For DM tabs, show "Pop Out to Window" instead of generic popout
+        if (isDMTab)
         {
-            tab.PopOut = true;
-            anyChanged = true;
+            if (ImGuiUtil.IconButton(FontAwesomeIcon.ExternalLinkAlt, tooltip: "Pop Out to DM Window"))
+            {
+                DMManager.Instance.ConvertTabToWindow(dmTab.Player);
+                anyChanged = true;
+            }
+        }
+        else
+        {
+            if (ImGuiUtil.IconButton(FontAwesomeIcon.WindowRestore, tooltip: Language.ChatLog_Tabs_PopOut))
+            {
+                tab.PopOut = true;
+                anyChanged = true;
+            }
+        }
+
+        // Add DM-specific context menu options
+        if (isDMTab)
+        {
+            ImGui.Separator();
+            
+            // Add friend option
+            if (ImGui.MenuItem("Add Friend"))
+            {
+                try
+                {
+                    var friendCommand = $"/friendlist add {dmTab.Player.DisplayName}";
+                    ChatBox.SendMessage(friendCommand);
+                }
+                catch (Exception ex)
+                {
+                    Plugin.Log.Error($"Failed to add {dmTab.Player} as friend: {ex.Message}");
+                }
+            }
+            
+            // Invite to party option
+            if (ImGui.MenuItem("Invite to Party"))
+            {
+                try
+                {
+                    var inviteCommand = $"/invite {dmTab.Player.DisplayName}";
+                    ChatBox.SendMessage(inviteCommand);
+                }
+                catch (Exception ex)
+                {
+                    Plugin.Log.Error($"Failed to invite {dmTab.Player} to party: {ex.Message}");
+                }
+            }
+            
+            // Open character card option
+            if (ImGui.MenuItem("Open Character Card"))
+            {
+                try
+                {
+                    var examineCommand = $"/examine {dmTab.Player.DisplayName}";
+                    ChatBox.SendMessage(examineCommand);
+                }
+                catch (Exception ex)
+                {
+                    Plugin.Log.Error($"Failed to open character card for {dmTab.Player}: {ex.Message}");
+                }
+            }
         }
 
         if (anyChanged)

@@ -690,6 +690,71 @@ public sealed class PayloadHandler
         if (validContentId && ImGui.Selectable(Language.Context_AdventurerPlate))
             if (!GameFunctions.GameFunctions.TryOpenAdventurerPlate(chunk.Message!.ContentId))
                 WrapperUtil.AddNotification(Language.Context_AdventurerPlateError, NotificationType.Warning);
+
+        // DM context menu options
+        if ((Plugin.Config.EnableDMTabs || Plugin.Config.EnableDMWindows) && world.Value.IsPublic)
+        {
+            ImGui.Separator();
+            
+            // Check if a DM interface already exists for this player (without focusing it)
+            var dmManager = ChatTwo.DM.DMManager.Instance;
+            var dmPlayer = new ChatTwo.DM.DMPlayer(player.PlayerName, world.RowId);
+            var hasExistingWindow = dmManager.HasOpenDMWindow(dmPlayer);
+            var hasExistingTab = dmManager.HasOpenDMTab(dmPlayer);
+            var hasExistingDM = hasExistingWindow || hasExistingTab;
+            
+            if (hasExistingDM)
+            {
+                // If DM interface already exists, show a "Focus DM" option
+                if (ImGui.Selectable("Focus Existing DM"))
+                {
+                    // Now actually focus the existing DM interface
+                    dmManager.FocusExistingDMInterface(player.PlayerName, world.RowId);
+                }
+            }
+            else
+            {
+                // No existing DM interface, show creation options based on configuration
+                switch (Plugin.Config.DefaultDMMode)
+                {
+                    case Configuration.DMDefaultMode.Tab:
+                        if (Plugin.Config.EnableDMTabs && ImGui.Selectable("Open DM Tab"))
+                        {
+                            dmManager.CreateDMTabFromPlayerInfo(player.PlayerName, world.RowId);
+                        }
+                        // Show window option as secondary if enabled
+                        if (Plugin.Config.EnableDMWindows && ImGui.Selectable("Open DM Window"))
+                        {
+                            dmManager.CreateDMWindowFromPlayerInfo(player.PlayerName, world.RowId, LogWindow);
+                        }
+                        break;
+                        
+                    case Configuration.DMDefaultMode.Window:
+                        if (Plugin.Config.EnableDMWindows && ImGui.Selectable("Open DM Window"))
+                        {
+                            dmManager.CreateDMWindowFromPlayerInfo(player.PlayerName, world.RowId, LogWindow);
+                        }
+                        // Show tab option as secondary if enabled
+                        if (Plugin.Config.EnableDMTabs && ImGui.Selectable("Open DM Tab"))
+                        {
+                            dmManager.CreateDMTabFromPlayerInfo(player.PlayerName, world.RowId);
+                        }
+                        break;
+                        
+                    case Configuration.DMDefaultMode.Ask:
+                        // Show both options with equal priority
+                        if (Plugin.Config.EnableDMTabs && ImGui.Selectable("Open DM Tab"))
+                        {
+                            dmManager.CreateDMTabFromPlayerInfo(player.PlayerName, world.RowId);
+                        }
+                        if (Plugin.Config.EnableDMWindows && ImGui.Selectable("Open DM Window"))
+                        {
+                            dmManager.CreateDMWindowFromPlayerInfo(player.PlayerName, world.RowId, LogWindow);
+                        }
+                        break;
+                }
+            }
+        }
     }
 
     private IPlayerCharacter? FindCharacterForPayload(PlayerPayload payload)

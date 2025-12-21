@@ -164,6 +164,12 @@ internal sealed class Display : ISettingsTab
             ImGuiUtil.OptionCheckbox(ref Mutable.EnhancedInputFeedback, "Enhanced Input Visual Feedback", "Improved visual feedback with focus states and error highlighting");
             ImGui.Spacing();
             
+            ImGui.Text("Unfocused Window Transparency");
+            ImGui.SetNextItemWidth(200);
+            ImGui.SliderFloat("##unfocused-transparency", ref Mutable.UnfocusedTransparency, 10.0f, 100.0f, "%.0f%%");
+            ImGuiUtil.HelpText("Transparency level for unfocused DM windows (lower = more transparent)");
+            ImGui.Spacing();
+            
             ImGui.Separator();
             ImGui.Text("Better Tab System");
             ImGui.Spacing();

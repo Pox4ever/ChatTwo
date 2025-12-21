@@ -1,6 +1,7 @@
 using System.Numerics;
 using System.Runtime.InteropServices;
 using ChatTwo.Code;
+using ChatTwo.DM;
 using ChatTwo.GameFunctions.Types;
 using ChatTwo.Util;
 using Dalamud.Interface;
@@ -310,6 +311,12 @@ public static class ModernUI
     
     internal static FontAwesomeIcon GetTabIcon(Tab tab)
     {
+        // Check if this is a DM tab first
+        if (tab is DMTab dmTab)
+        {
+            return dmTab.GetDMTabIcon();
+        }
+        
         // Determine the primary chat type for this tab
         var primaryType = ChatType.Say; // Default
         
@@ -440,9 +447,21 @@ public static class ModernUI
 
             if (sourceIndex >= 0 && sourceIndex < tabs.Count)
             {
-                // Pop out the tab
-                tabs[sourceIndex].PopOut = true;
-                return true;
+                var tab = tabs[sourceIndex];
+                
+                // Check if this is a DM tab
+                if (tab is DMTab dmTab)
+                {
+                    // Use DMManager to convert tab to window
+                    var dmWindow = DMManager.Instance.ConvertTabToWindow(dmTab.Player);
+                    return dmWindow != null;
+                }
+                else
+                {
+                    // Pop out regular tab
+                    tab.PopOut = true;
+                    return true;
+                }
             }
         }
 

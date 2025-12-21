@@ -40,6 +40,7 @@ public sealed class SettingsWindow : Window
             new Fonts(Mutable),
             new ChatColours(Plugin, Mutable),
             new Tabs(Plugin, Mutable),
+            new DirectMessages(Mutable),
             new Database(Plugin, Mutable),
             new Webinterface(Plugin, Mutable),
             new Miscellaneous(Mutable),

@@ -1,5 +1,6 @@
 ﻿using System.Numerics;
 using ChatTwo.Code;
+using ChatTwo.DM;
 using ChatTwo.GameFunctions;
 using ChatTwo.GameFunctions.Types;
 using ChatTwo.Resources;
@@ -117,35 +118,41 @@ internal class Popout : Window
     {
         ImGui.Separator();
         
-        // Channel selector button (back to simple icon)
+        // Hide channel selector for DM tabs - they always send tells
+        var isDMTab = Tab is DMTab;
+        
+        // Channel selector button (back to simple icon) - hidden for DM tabs
         var beforeIcon = ImGui.GetCursorPos();
-        using (ModernUI.PushModernButtonStyle(Plugin.Config))
+        if (!isDMTab)
         {
-            if (ImGuiUtil.IconButton(FontAwesomeIcon.Comment) && Tab.Channel is null)
-                ImGui.OpenPopup("PopoutChannelPicker");
-        }
-
-        if (Tab.Channel is not null && ImGui.IsItemHovered())
-            ModernUI.DrawModernTooltip(Language.ChatLog_SwitcherDisabled, Plugin.Config);
-
-        using (var popup = ImRaii.Popup("PopoutChannelPicker"))
-        {
-            if (popup)
+            using (ModernUI.PushModernButtonStyle(Plugin.Config))
             {
-                var channels = ChatLogWindow.GetValidChannels();
-                foreach (var (name, channel) in channels)
-                    if (ImGui.Selectable(name))
-                        ChatLogWindow.SetChannel(channel);
+                if (ImGuiUtil.IconButton(FontAwesomeIcon.Comment) && Tab.Channel is null)
+                    ImGui.OpenPopup("PopoutChannelPicker");
             }
-        }
 
-        ImGui.SameLine();
+            if (Tab.Channel is not null && ImGui.IsItemHovered())
+                ModernUI.DrawModernTooltip(Language.ChatLog_SwitcherDisabled, Plugin.Config);
+
+            using (var popup = ImRaii.Popup("PopoutChannelPicker"))
+            {
+                if (popup)
+                {
+                    var channels = ChatLogWindow.GetValidChannels();
+                    foreach (var (name, channel) in channels)
+                        if (ImGui.Selectable(name))
+                            ChatLogWindow.SetChannel(channel);
+                }
+            }
+
+            ImGui.SameLine();
+        }
         var afterIcon = ImGui.GetCursorPos();
-        var buttonWidth = afterIcon.X - beforeIcon.X;
+        var buttonWidth = isDMTab ? 0 : afterIcon.X - beforeIcon.X;
         var inputWidth = ImGui.GetContentRegionAvail().X;
 
-        // Input field
-        var inputType = Tab.CurrentChannel.UseTempChannel ? Tab.CurrentChannel.TempChannel.ToChatType() : Tab.CurrentChannel.Channel.ToChatType();
+        // Input field - for DM tabs, always use TellOutgoing color
+        var inputType = isDMTab ? ChatType.TellOutgoing : (Tab.CurrentChannel.UseTempChannel ? Tab.CurrentChannel.TempChannel.ToChatType() : Tab.CurrentChannel.Channel.ToChatType());
         var isCommand = PopoutChat.Trim().StartsWith('/');
         if (isCommand)
         {
@@ -183,7 +190,10 @@ internal class Popout : Window
                 using (styleScope)
                 using (colorScope)
                 {
-                    var placeholder = isChatEnabled ? "Type your message..." : Language.ChatLog_DisabledInput;
+                    // Different placeholder for DM tabs to indicate direct messaging
+                    var placeholder = isChatEnabled 
+                        ? (isDMTab && Tab is DMTab dmTab ? $"Message {dmTab.Player.TabName}..." : "Type your message...") 
+                        : Language.ChatLog_DisabledInput;
                     if (ImGui.InputTextWithHint("##popout-chat-input", placeholder, ref PopoutChat, 500, flags))
                     {
                         // Send message on Enter
@@ -244,7 +254,39 @@ internal class Popout : Window
         if (string.IsNullOrWhiteSpace(PopoutChat))
             return;
             
-        // Use the main chat window's send functionality
+        // Handle DM tabs specially in popout windows
+        if (Tab is DMTab dmTab)
+        {
+            var trimmedMessage = PopoutChat.Trim();
+            
+            try
+            {
+                if (trimmedMessage.StartsWith('/'))
+                {
+                    // Commands are sent as-is (not as tells)
+                    ChatBox.SendMessage(trimmedMessage);
+                }
+                else
+                {
+                    // Non-command messages are sent as tells to the DM target
+                    var tellCommand = $"/tell {dmTab.Player.DisplayName} {trimmedMessage}";
+                    ChatBox.SendMessage(tellCommand);
+                    
+                    // Display outgoing message in the DM tab
+                    DisplayOutgoingMessageInPopout(dmTab, trimmedMessage);
+                }
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.Error($"Failed to send DM message from popout to {dmTab.Player}: {ex.Message}");
+                DisplayErrorMessageInPopout(dmTab, $"Failed to send message: {GetUserFriendlyErrorMessage(ex)}");
+            }
+            
+            PopoutChat = string.Empty;
+            return;
+        }
+            
+        // Use the main chat window's send functionality for regular tabs
         var originalChat = ChatLogWindow.Chat;
         ChatLogWindow.Chat = PopoutChat;
         
@@ -257,6 +299,70 @@ internal class Popout : Window
         {
             ChatLogWindow.Chat = originalChat; // Restore original chat
         }
+    }
+
+    /// <summary>
+    /// Displays an outgoing message in a DM tab from popout with appropriate styling.
+    /// </summary>
+    private void DisplayOutgoingMessageInPopout(DMTab dmTab, string messageContent)
+    {
+        try
+        {
+            // Create a fake outgoing tell message for display
+            var outgoingMessage = Message.FakeMessage(
+                new List<Chunk>
+                {
+                    new TextChunk(ChunkSource.None, null, $">> {messageContent}")
+                },
+                new ChatCode((ushort)ChatType.TellOutgoing)
+            );
+            
+            // Add to both the tab and history
+            dmTab.AddMessage(outgoingMessage, unread: false);
+            dmTab.History.AddMessage(outgoingMessage, isIncoming: false);
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to display outgoing message in DM popout: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Displays an error message in a DM tab from popout.
+    /// </summary>
+    private void DisplayErrorMessageInPopout(DMTab dmTab, string errorText)
+    {
+        try
+        {
+            var errorMessage = Message.FakeMessage(
+                new List<Chunk>
+                {
+                    new TextChunk(ChunkSource.None, null, errorText)
+                },
+                new ChatCode((ushort)ChatType.Error)
+            );
+            
+            dmTab.AddMessage(errorMessage, unread: false);
+            dmTab.History.AddMessage(errorMessage, isIncoming: false);
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to display error message in DM popout: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Converts technical exceptions to user-friendly error messages.
+    /// </summary>
+    private string GetUserFriendlyErrorMessage(Exception ex)
+    {
+        return ex.Message switch
+        {
+            var msg when msg.Contains("message is empty") => "Cannot send empty message",
+            var msg when msg.Contains("message is longer than 500 bytes") => "Message is too long (max 500 characters)",
+            var msg when msg.Contains("message contained invalid characters") => "Message contains invalid characters",
+            _ => "Unable to send message. Please try again."
+        };
     }
 
     public override void PostDraw()

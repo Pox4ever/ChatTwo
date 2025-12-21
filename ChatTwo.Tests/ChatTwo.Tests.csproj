@@ -11,6 +11,7 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="MSTest.TestAdapter" Version="3.6.3" />
     <PackageReference Include="MSTest.TestFramework" Version="3.6.3" />
+    <PackageReference Include="FsCheck" Version="2.16.6" />
   </ItemGroup>
 
   <ItemGroup>
@@ -18,7 +19,7 @@
   </ItemGroup>
 
     <PropertyGroup>
-        <DalamudLibPath>$(AppData)\XIVLauncher\addon\Hooks\dev</DalamudLibPath>
+        <DalamudLibPath>$(MSBuildThisFileDirectory)..\..\Dalamud3\bin\Debug</DalamudLibPath>
     </PropertyGroup>
 
     <PropertyGroup Condition="'$([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform($([System.Runtime.InteropServices.OSPlatform]::Linux)))'">
@@ -32,19 +33,31 @@
     <ItemGroup>
         <Reference Include="Dalamud">
             <HintPath>$(DalamudLibPath)\Dalamud.dll</HintPath>
-            <Private>false</Private>
+            <Private>true</Private>
         </Reference>
         <Reference Include="FFXIVClientStructs">
             <HintPath>$(DalamudLibPath)\FFXIVClientStructs.dll</HintPath>
-            <Private>false</Private>
+            <Private>true</Private>
         </Reference>
         <Reference Include="Lumina">
             <HintPath>$(DalamudLibPath)\Lumina.dll</HintPath>
-            <Private>false</Private>
+            <Private>true</Private>
         </Reference>
         <Reference Include="Lumina.Excel">
             <HintPath>$(DalamudLibPath)\Lumina.Excel.dll</HintPath>
-            <Private>false</Private>
+            <Private>true</Private>
+        </Reference>
+        <Reference Include="MessagePack">
+            <HintPath>$(DalamudLibPath)\MessagePack.dll</HintPath>
+            <Private>true</Private>
+        </Reference>
+        <Reference Include="MessagePack.Annotations">
+            <HintPath>$(DalamudLibPath)\MessagePack.Annotations.dll</HintPath>
+            <Private>true</Private>
+        </Reference>
+        <Reference Include="Newtonsoft.Json">
+            <HintPath>$(DalamudLibPath)\Newtonsoft.Json.dll</HintPath>
+            <Private>true</Private>
         </Reference>
     </ItemGroup>
 

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using ChatTwo.DM;
 using ChatTwo.Http;
 using ChatTwo.Ipc;
 using ChatTwo.Resources;
@@ -55,6 +56,7 @@ public sealed class Plugin : IDalamudPlugin
     internal Commands Commands { get; }
     internal GameFunctions.GameFunctions Functions { get; }
     internal MessageManager MessageManager { get; }
+    internal DMMessageRouter DMMessageRouter { get; }
     internal IpcManager Ipc { get; }
     internal ExtraChat ExtraChat { get; }
     internal TypingIpc TypingIpc { get; }
@@ -98,6 +100,11 @@ public sealed class Plugin : IDalamudPlugin
 
             Commands = new Commands(this);
             Functions = new GameFunctions.GameFunctions(this);
+            DMMessageRouter = new DMMessageRouter(this);
+            
+            // Initialize DMManager with Plugin instance
+            DMManager.Instance.Initialize(this);
+            
             Ipc = new IpcManager();
             TypingIpc = new TypingIpc(this);
             ExtraChat = new ExtraChat(this);

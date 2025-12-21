@@ -136,6 +136,7 @@ internal class Configuration : IPluginConfiguration
     public bool ShowFloatingChannelIndicator = true;
     public bool ShowTypingIndicator = true;
     public bool EnhancedInputFeedback = true;
+    public float UnfocusedTransparency = 70.0f; // Percentage of transparency for unfocused windows
     
     // Better Tab System Settings
     public bool ShowTabIcons = true;
@@ -147,7 +148,21 @@ internal class Configuration : IPluginConfiguration
     public bool EnableEmotePickerPopup = true;
     public bool EmotePickerSearchEnabled = true;
 
+    // DM Management Settings
+    public bool CloseDMsOnLogout { get; set; } = false;
+    public bool CloseDMsInCombat { get; set; } = false;
+    public bool AutoOpenDMOnNewTell { get; set; } = false;
+    public DMDefaultMode DefaultDMMode { get; set; } = DMDefaultMode.Tab;
+    public ConfigKeyBind? OpenRecentDMKeybind { get; set; }
+
     public ConfigKeyBind? ChatTabForward;
+
+    public enum DMDefaultMode
+    {
+        Tab,
+        Window,
+        Ask // Show both options in context menu
+    }
     public ConfigKeyBind? ChatTabBackward;
 
     // Webinterface
@@ -157,6 +172,23 @@ internal class Configuration : IPluginConfiguration
     public int WebinterfacePort = 9000;
     public HashSet<string> AuthStore = [];
     public int WebinterfaceMaxLinesToSend = 1000; // 1-10000
+
+    // DM Feature Settings
+    public bool EnableDMWindows { get; set; } = true;
+    public bool EnableDMTabs { get; set; } = true;
+    
+    // Message Routing Settings
+    public bool ShowTellsInMainChat { get; set; } = true;
+    public bool ShowTellsInDMOnly { get; set; } = false;
+    
+    // Window Management Settings
+    public bool CascadeDMWindows { get; set; } = true;
+    public System.Numerics.Vector2 DMWindowCascadeOffset { get; set; } = new(30, 30);
+    
+    // Appearance Settings
+    public bool ShowDMTabIcons { get; set; } = true;
+    public bool ShowUnreadIndicators { get; set; } = true;
+    public string DMTabSuffix { get; set; } = " (DM)"; // For name conflicts
 
     internal void UpdateFrom(Configuration other, bool backToOriginal)
     {
@@ -247,6 +279,7 @@ internal class Configuration : IPluginConfiguration
         ShowFloatingChannelIndicator = other.ShowFloatingChannelIndicator;
         ShowTypingIndicator = other.ShowTypingIndicator;
         EnhancedInputFeedback = other.EnhancedInputFeedback;
+        UnfocusedTransparency = other.UnfocusedTransparency;
         
         // Better Tab System Settings
         ShowTabIcons = other.ShowTabIcons;
@@ -258,6 +291,13 @@ internal class Configuration : IPluginConfiguration
         EnableEmotePickerPopup = other.EnableEmotePickerPopup;
         EmotePickerSearchEnabled = other.EmotePickerSearchEnabled;
         
+        // DM Management Settings
+        CloseDMsOnLogout = other.CloseDMsOnLogout;
+        CloseDMsInCombat = other.CloseDMsInCombat;
+        AutoOpenDMOnNewTell = other.AutoOpenDMOnNewTell;
+        DefaultDMMode = other.DefaultDMMode;
+        OpenRecentDMKeybind = other.OpenRecentDMKeybind;
+        
         ChatTabForward = other.ChatTabForward;
         ChatTabBackward = other.ChatTabBackward;
         WebinterfaceEnabled = other.WebinterfaceEnabled;
@@ -265,6 +305,17 @@ internal class Configuration : IPluginConfiguration
         WebinterfacePassword = other.WebinterfacePassword;
         WebinterfacePort = other.WebinterfacePort;
         WebinterfaceMaxLinesToSend = other.WebinterfaceMaxLinesToSend;
+        
+        // DM Feature Settings
+        EnableDMWindows = other.EnableDMWindows;
+        EnableDMTabs = other.EnableDMTabs;
+        ShowTellsInMainChat = other.ShowTellsInMainChat;
+        ShowTellsInDMOnly = other.ShowTellsInDMOnly;
+        CascadeDMWindows = other.CascadeDMWindows;
+        DMWindowCascadeOffset = other.DMWindowCascadeOffset;
+        ShowDMTabIcons = other.ShowDMTabIcons;
+        ShowUnreadIndicators = other.ShowUnreadIndicators;
+        DMTabSuffix = other.DMTabSuffix;
     }
 }
 
@@ -498,6 +549,8 @@ internal class Tab
 
         internal class RLockedMessageList(SemaphoreSlim lockSlim, List<Message> messages) : IReadOnlyList<Message>, IDisposable
         {
+            private bool _disposed = false;
+            
             public IEnumerator<Message> GetEnumerator()
             {
                 return messages.GetEnumerator();
@@ -514,7 +567,22 @@ internal class Tab
 
             public void Dispose()
             {
-                lockSlim.Release();
+                if (!_disposed)
+                {
+                    try
+                    {
+                        lockSlim.Release();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        // Semaphore was already disposed, ignore
+                    }
+                    catch (SemaphoreFullException)
+                    {
+                        // Semaphore is already at max count, ignore
+                    }
+                    _disposed = true;
+                }
             }
         }
     }
@@ -717,5 +785,25 @@ internal static class ExtraGlyphRangesExt
         ExtraGlyphRanges.Thai => (nint)ImGui.GetIO().Fonts.GetGlyphRangesThai(),
         ExtraGlyphRanges.Vietnamese => (nint)ImGui.GetIO().Fonts.GetGlyphRangesVietnamese(),
         _ => throw new ArgumentOutOfRangeException(nameof(ranges), ranges, null),
+    };
+}
+
+
+internal static class DMDefaultModeExt
+{
+    internal static string Name(this Configuration.DMDefaultMode mode) => mode switch
+    {
+        Configuration.DMDefaultMode.Tab => "Tab",
+        Configuration.DMDefaultMode.Window => "Window", 
+        Configuration.DMDefaultMode.Ask => "Ask Each Time",
+        _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, null),
+    };
+
+    internal static string? Tooltip(this Configuration.DMDefaultMode mode) => mode switch
+    {
+        Configuration.DMDefaultMode.Tab => "Open DMs as tabs in the main chat window by default",
+        Configuration.DMDefaultMode.Window => "Open DMs as separate windows by default",
+        Configuration.DMDefaultMode.Ask => "Show both tab and window options in context menu",
+        _ => null,
     };
 }

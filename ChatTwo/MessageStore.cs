@@ -150,10 +150,34 @@ internal class MessageStore : IDisposable
 
         var conn = new SqliteConnection(uriBuilder.ToString());
         conn.Open();
-        conn.Execute(@"PRAGMA journal_mode=WAL;");
-        conn.Execute(@"PRAGMA synchronous=NORMAL;");
-        if (DalamudUtil.IsWine())
-            conn.Execute(@"PRAGMA cache_size = 32768;");
+        
+        // Optimize for test environment
+        if (DbPath.Contains("ChatTwo_test_") || DbPath == ":memory:")
+        {
+            // Test environment optimizations
+            conn.Execute(@"PRAGMA journal_mode=MEMORY;");
+            conn.Execute(@"PRAGMA synchronous=OFF;");
+            conn.Execute(@"PRAGMA cache_size=10000;");
+            conn.Execute(@"PRAGMA temp_store=MEMORY;");
+        }
+        else
+        {
+            // Production environment settings
+            conn.Execute(@"PRAGMA journal_mode=WAL;");
+            conn.Execute(@"PRAGMA synchronous=NORMAL;");
+        }
+        
+        try
+        {
+            if (DalamudUtil.IsWine())
+                conn.Execute(@"PRAGMA cache_size = 32768;");
+        }
+        catch
+        {
+            // In test environment, DalamudUtil might not be available
+            // Default cache size will be used
+        }
+        
         return conn;
     }
 

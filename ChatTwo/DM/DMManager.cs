@@ -1,0 +1,1258 @@
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
+using ChatTwo.Code;
+using ChatTwo.DM;
+using ChatTwo.Ui;
+
+namespace ChatTwo.DM;
+
+/// <summary>
+/// Singleton service for managing DM state, histories, and routing.
+/// </summary>
+internal class DMManager
+{
+    private static DMManager? _instance;
+    private static readonly object _instanceLock = new();
+    private Plugin? _plugin;
+
+    /// <summary>
+    /// Gets the Plugin instance if DMManager has been initialized.
+    /// </summary>
+    public Plugin? PluginInstance => _plugin;
+
+    public static DMManager Instance
+    {
+        get
+        {
+            if (_instance == null)
+            {
+                lock (_instanceLock)
+                {
+                    _instance ??= new DMManager();
+                }
+            }
+            return _instance;
+        }
+    }
+
+    private readonly ConcurrentDictionary<DMPlayer, DMMessageHistory> _histories = new();
+    private readonly ConcurrentDictionary<DMPlayer, DMTab> _openTabs = new();
+    private readonly ConcurrentDictionary<DMPlayer, DMWindow> _openWindows = new();
+    private readonly object _lock = new();
+
+    private DMManager()
+    {
+        // Plugin will be set later via Initialize method
+    }
+
+    /// <summary>
+    /// Initializes the DMManager with a Plugin instance.
+    /// This must be called before using any methods that require Plugin access.
+    /// </summary>
+    /// <param name="plugin">The Plugin instance</param>
+    public void Initialize(Plugin plugin)
+    {
+        _plugin = plugin ?? throw new ArgumentNullException(nameof(plugin));
+        
+        // Register DM commands
+        RegisterCommands();
+        
+        // Subscribe to game events
+        SubscribeToEvents();
+    }
+
+    /// <summary>
+    /// Gets or creates a message history for the specified player.
+    /// </summary>
+    /// <param name="player">The player to get history for</param>
+    /// <returns>The message history for the player</returns>
+    public DMMessageHistory GetOrCreateHistory(DMPlayer player)
+    {
+        if (player == null)
+            throw new ArgumentNullException(nameof(player));
+
+        return _histories.GetOrAdd(player, p => new DMMessageHistory(p));
+    }
+
+    /// <summary>
+    /// Gets the message history for a player if it exists.
+    /// </summary>
+    /// <param name="player">The player to get history for</param>
+    /// <returns>The message history or null if not found</returns>
+    public DMMessageHistory? GetHistory(DMPlayer player)
+    {
+        if (player == null)
+            return null;
+
+        _histories.TryGetValue(player, out var history);
+        return history;
+    }
+
+    /// <summary>
+    /// Gets all players with message histories.
+    /// </summary>
+    /// <returns>Collection of players with histories</returns>
+    public IEnumerable<DMPlayer> GetPlayersWithHistory()
+    {
+        return _histories.Keys.ToList();
+    }
+
+    /// <summary>
+    /// Removes the history for a specific player.
+    /// </summary>
+    /// <param name="player">The player whose history to remove</param>
+    /// <returns>True if the history was removed, false if it didn't exist</returns>
+    public bool RemoveHistory(DMPlayer player)
+    {
+        if (player == null)
+            return false;
+
+        return _histories.TryRemove(player, out _);
+    }
+
+    /// <summary>
+    /// Clears all message histories.
+    /// </summary>
+    public void ClearAllHistories()
+    {
+        _histories.Clear();
+    }
+
+    /// <summary>
+    /// Routes an incoming tell message to the appropriate DM history.
+    /// </summary>
+    /// <param name="message">The incoming tell message</param>
+    public void RouteIncomingTell(Message message)
+    {
+        if (message == null || !message.IsTell())
+            return;
+
+        try
+        {
+            var player = message.ExtractPlayerFromMessage();
+            if (player != null)
+            {
+                var history = GetOrCreateHistory(player);
+                history.AddMessage(message, isIncoming: true);
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to route incoming tell: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Handles an outgoing tell message.
+    /// </summary>
+    /// <param name="player">The target player</param>
+    /// <param name="message">The outgoing message</param>
+    public void HandleOutgoingTell(DMPlayer player, Message message)
+    {
+        if (player == null || message == null)
+            return;
+
+        try
+        {
+            var history = GetOrCreateHistory(player);
+            history.AddMessage(message, isIncoming: false);
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to handle outgoing tell: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Opens or focuses a DM window for the specified player.
+    /// </summary>
+    /// <param name="player">The player to open a DM window for</param>
+    /// <param name="chatLogWindow">The main chat log window instance</param>
+    /// <returns>The DMWindow instance, or null if creation failed</returns>
+    public DMWindow? OpenDMWindow(DMPlayer player, ChatLogWindow chatLogWindow)
+    {
+        if (player == null || chatLogWindow == null)
+            return null;
+
+        try
+        {
+            // Check if window already exists
+            if (_openWindows.TryGetValue(player, out var existingWindow))
+            {
+                // Focus the existing window
+                existingWindow.IsOpen = true;
+                existingWindow.BringToFront();
+                return existingWindow;
+            }
+
+            // Create new DM window
+            var dmWindow = new DMWindow(chatLogWindow, player);
+            
+            // Add to open windows tracking
+            _openWindows.TryAdd(player, dmWindow);
+            
+            // Add to the window system
+            chatLogWindow.Plugin.WindowSystem.AddWindow(dmWindow);
+            
+            return dmWindow;
+        }
+        catch (Exception ex)
+        {
+            DMErrorHandler.HandleUIStateError("window_creation", ex);
+            DMErrorHandler.LogDetailedError("OpenDMWindow", ex, new Dictionary<string, object>
+            {
+                ["PlayerName"] = player.Name,
+                ["PlayerWorld"] = player.HomeWorld
+            });
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Closes a DM window for the specified player.
+    /// </summary>
+    /// <param name="player">The player whose DM window to close</param>
+    /// <returns>True if the window was closed, false if it didn't exist</returns>
+    public bool CloseDMWindow(DMPlayer player)
+    {
+        if (player == null)
+            return false;
+
+        try
+        {
+            if (_openWindows.TryRemove(player, out var dmWindow))
+            {
+                // Only set IsOpen to false if it's not already closed
+                if (dmWindow.IsOpen)
+                {
+                    dmWindow.IsOpen = false;
+                }
+                return true;
+            }
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to close DM window for {player}: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Gets the DM window for a specific player if it exists.
+    /// </summary>
+    /// <param name="player">The player to get the DM window for</param>
+    /// <returns>The DMWindow instance or null if not found</returns>
+    public DMWindow? GetDMWindow(DMPlayer player)
+    {
+        if (player == null)
+            return null;
+
+        _openWindows.TryGetValue(player, out var dmWindow);
+        return dmWindow;
+    }
+
+    /// <summary>
+    /// Checks if a DM window is open for the specified player.
+    /// </summary>
+    /// <param name="player">The player to check</param>
+    /// <returns>True if a DM window is open, false otherwise</returns>
+    public bool HasOpenDMWindow(DMPlayer player)
+    {
+        if (player == null)
+            return false;
+            
+        if (_openWindows.TryGetValue(player, out var window))
+        {
+            // Check if the window is actually open
+            if (window.IsOpen)
+            {
+                return true;
+            }
+            else
+            {
+                // Window exists but is closed, remove it from tracking
+                _openWindows.TryRemove(player, out _);
+                return false;
+            }
+        }
+        
+        return false;
+    }
+
+    /// <summary>
+    /// Gets all currently open DM windows.
+    /// </summary>
+    /// <returns>Collection of open DM windows</returns>
+    public IEnumerable<DMWindow> GetOpenDMWindows()
+    {
+        return _openWindows.Values.ToList();
+    }
+
+    /// <summary>
+    /// Checks if a DM tab is open for the specified player.
+    /// </summary>
+    /// <param name="player">The player to check</param>
+    /// <returns>True if a DM tab is open, false otherwise</returns>
+    public bool HasOpenDMTab(DMPlayer player)
+    {
+        return player != null && _openTabs.ContainsKey(player);
+    }
+
+    /// <summary>
+    /// Checks if any DM interface (tab or window) is open for the specified player.
+    /// </summary>
+    /// <param name="player">The player to check</param>
+    /// <returns>True if any DM interface is open, false otherwise</returns>
+    public bool HasOpenDM(DMPlayer player)
+    {
+        return HasOpenDMTab(player) || HasOpenDMWindow(player);
+    }
+
+    /// <summary>
+    /// Converts a DM tab to a DM window.
+    /// </summary>
+    /// <param name="player">The player whose DM tab to convert</param>
+    /// <param name="chatLogWindow">The main chat log window instance</param>
+    /// <returns>The new DMWindow instance, or null if conversion failed</returns>
+    public DMWindow? ConvertTabToWindow(DMPlayer player, ChatLogWindow chatLogWindow)
+    {
+        if (player == null || chatLogWindow == null)
+            return null;
+
+        try
+        {
+            // Close the existing tab
+            if (CloseDMTab(player))
+            {
+                // Open a new window
+                return OpenDMWindow(player, chatLogWindow);
+            }
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to convert DM tab to window for {player}: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Converts a DM window to a DM tab.
+    /// </summary>
+    /// <param name="player">The player whose DM window to convert</param>
+    /// <returns>The new DMTab instance, or null if conversion failed</returns>
+    public DMTab? ConvertWindowToTab(DMPlayer player)
+    {
+        if (player == null)
+            return null;
+
+        try
+        {
+            Plugin.Log.Debug($"ConvertWindowToTab: Starting conversion for {player.DisplayName}");
+            
+            // Get the existing DM window
+            if (!_openWindows.TryGetValue(player, out var dmWindow))
+            {
+                Plugin.Log.Warning($"Cannot convert window to tab: No DM window found for {player}");
+                return null;
+            }
+            
+            // Get all messages from the window before closing it
+            Message[] windowMessages = [];
+            try
+            {
+                using var messages = dmWindow.DMTab.Messages.GetReadOnly(1000);
+                windowMessages = messages.ToArray();
+                Plugin.Log.Debug($"ConvertWindowToTab: Retrieved {windowMessages.Length} messages from window");
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.Warning($"ConvertWindowToTab: Failed to retrieve messages from window: {ex.Message}");
+                // Continue with conversion, new tab will load from history
+            }
+            
+            // Close the existing window first
+            if (!CloseDMWindow(player))
+            {
+                Plugin.Log.Error($"ConvertWindowToTab: Failed to close DM window for {player}");
+                return null;
+            }
+            
+            // Create a new tab WITHOUT using OpenDMTab to avoid automatic history loading
+            var newTab = new DMTab(player);
+            
+            // Add to open tabs tracking BEFORE transferring messages
+            _openTabs.TryAdd(player, newTab);
+            
+            // Add to the main configuration tabs list
+            Plugin.Config.Tabs.Add(newTab);
+            
+            // Transfer messages from window to new tab BEFORE any history loading
+            if (windowMessages.Length > 0)
+            {
+                try
+                {
+                    Plugin.Log.Debug($"ConvertWindowToTab: Transferring {windowMessages.Length} messages to new tab");
+                    
+                    // Add all messages from the window to the new tab
+                    foreach (var message in windowMessages)
+                    {
+                        newTab.AddMessage(message, unread: false);
+                    }
+                    
+                    Plugin.Log.Debug($"ConvertWindowToTab: Successfully transferred {windowMessages.Length} messages to new tab");
+                }
+                catch (Exception ex)
+                {
+                    Plugin.Log.Warning($"ConvertWindowToTab: Failed to transfer messages to tab: {ex.Message}");
+                    
+                    // If transfer fails, load from history as fallback
+                    try
+                    {
+                        var history = GetOrCreateHistory(player);
+                        var recentMessages = history.GetRecentMessages(50);
+                        foreach (var message in recentMessages)
+                        {
+                            newTab.AddMessage(message, unread: false);
+                        }
+                        Plugin.Log.Debug($"ConvertWindowToTab: Loaded {recentMessages.Length} messages from history as fallback");
+                    }
+                    catch (Exception historyEx)
+                    {
+                        Plugin.Log.Error($"ConvertWindowToTab: Failed to load history as fallback: {historyEx.Message}");
+                    }
+                }
+            }
+            else
+            {
+                // No messages in window, load from history
+                try
+                {
+                    var history = GetOrCreateHistory(player);
+                    var recentMessages = history.GetRecentMessages(50);
+                    foreach (var message in recentMessages)
+                    {
+                        newTab.AddMessage(message, unread: false);
+                    }
+                    Plugin.Log.Debug($"ConvertWindowToTab: No window messages, loaded {recentMessages.Length} messages from history");
+                }
+                catch (Exception historyEx)
+                {
+                    Plugin.Log.Error($"ConvertWindowToTab: Failed to load history: {historyEx.Message}");
+                }
+            }
+            
+            // Focus the new tab
+            FocusDMTab(newTab);
+            
+            Plugin.Log.Info($"ConvertWindowToTab: Successfully converted DM window to tab for {player.DisplayName}");
+            return newTab;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to convert DM window to tab for {player}: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Opens or focuses a DM tab for the specified player.
+    /// </summary>
+    /// <param name="player">The player to open a DM tab for</param>
+    /// <returns>The DMTab instance, or null if creation failed</returns>
+    public DMTab? OpenDMTab(DMPlayer player)
+    {
+        if (player == null)
+            return null;
+
+        if (_plugin == null)
+        {
+            Plugin.Log.Error("OpenDMTab: DMManager not initialized with Plugin instance");
+            return null;
+        }
+
+        try
+        {
+            // Check if tab already exists
+            if (_openTabs.TryGetValue(player, out var existingTab))
+            {
+                // Focus the existing tab
+                FocusDMTab(existingTab);
+                return existingTab;
+            }
+
+            // Create new DM tab
+            var dmTab = new DMTab(player);
+            
+            // Load message history from MessageStore database
+            // This ensures message history survives plugin reloads
+            dmTab.LoadMessageHistoryFromStore();
+            
+            // Add to open tabs tracking
+            _openTabs.TryAdd(player, dmTab);
+            
+            // Add to the main configuration tabs list
+            Plugin.Config.Tabs.Add(dmTab);
+            
+            // Focus the new tab
+            FocusDMTab(dmTab);
+            
+            return dmTab;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to open DM tab for {player}: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Closes a DM tab for the specified player.
+    /// </summary>
+    /// <param name="player">The player whose DM tab to close</param>
+    /// <returns>True if the tab was closed, false if it didn't exist</returns>
+    public bool CloseDMTab(DMPlayer player)
+    {
+        if (player == null)
+            return false;
+
+        try
+        {
+            if (_openTabs.TryRemove(player, out var dmTab))
+            {
+                // Remove from main configuration tabs list
+                Plugin.Config.Tabs.Remove(dmTab);
+                return true;
+            }
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to close DM tab for {player}: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Gets the DM tab for a specific player if it exists.
+    /// </summary>
+    /// <param name="player">The player to get the DM tab for</param>
+    /// <returns>The DMTab instance or null if not found</returns>
+    public DMTab? GetDMTab(DMPlayer player)
+    {
+        if (player == null)
+            return null;
+
+        _openTabs.TryGetValue(player, out var dmTab);
+        return dmTab;
+    }
+
+    /// <summary>
+    /// Converts a DM tab to a DM window, preserving all data.
+    /// </summary>
+    /// <param name="player">The player whose DM tab to convert</param>
+    /// <returns>The created DMWindow or null if conversion failed</returns>
+    public DMWindow? ConvertTabToWindow(DMPlayer player)
+    {
+        if (player == null)
+            return null;
+
+        if (_plugin == null)
+        {
+            Plugin.Log.Error("ConvertTabToWindow: DMManager not initialized with Plugin instance");
+            return null;
+        }
+
+        try
+        {
+            Plugin.Log.Debug($"ConvertTabToWindow: Starting conversion for {player.DisplayName}");
+            
+            // Get the existing DM tab
+            if (!_openTabs.TryGetValue(player, out var dmTab))
+            {
+                Plugin.Log.Warning($"Cannot convert tab to window: No DM tab found for {player}");
+                return null;
+            }
+
+            // Get the ChatLogWindow instance from the plugin
+            var chatLogWindow = _plugin.ChatLogWindow;
+            if (chatLogWindow == null)
+            {
+                Plugin.Log.Error("Cannot convert tab to window: ChatLogWindow is null");
+                return null;
+            }
+
+            Plugin.Log.Debug($"ConvertTabToWindow: Creating DM window for {player.DisplayName}");
+            
+            // Create the DM window
+            var dmWindow = new DMWindow(chatLogWindow, player);
+            
+            // Transfer existing messages from the tab to the window to avoid duplication
+            try
+            {
+                using var tabMessages = dmTab.Messages.GetReadOnly(1000); // Get all messages from tab
+                if (tabMessages.Count > 0)
+                {
+                    Plugin.Log.Debug($"ConvertTabToWindow: Transferring {tabMessages.Count} messages from tab to window");
+                    
+                    // Clear any messages that might have been loaded from history
+                    // We'll replace them with the actual tab messages
+                    dmWindow.DMTab.Messages.Clear();
+                    
+                    // Add all messages from the tab
+                    foreach (var message in tabMessages)
+                    {
+                        dmWindow.DMTab.AddMessage(message, unread: false);
+                    }
+                    
+                    Plugin.Log.Debug($"ConvertTabToWindow: Successfully transferred {tabMessages.Count} messages");
+                }
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.Warning($"ConvertTabToWindow: Failed to transfer messages from tab: {ex.Message}");
+                // If transfer fails, the window will have loaded messages from history, which is acceptable
+            }
+            
+            Plugin.Log.Debug($"ConvertTabToWindow: Removing DM tab from tracking");
+            
+            // Remove the tab from our tracking
+            if (!_openTabs.TryRemove(player, out _))
+            {
+                Plugin.Log.Warning($"Failed to remove DM tab from tracking for {player}");
+            }
+            
+            // Remove the tab from the configuration
+            Plugin.Config.Tabs.Remove(dmTab);
+            _plugin.SaveConfig();
+            
+            // Add the window to our tracking
+            if (!_openWindows.ContainsKey(player))
+            {
+                _openWindows[player] = dmWindow;
+            }
+            
+            // Add the window to the window system
+            _plugin.WindowSystem.AddWindow(dmWindow);
+            
+            Plugin.Log.Info($"ConvertTabToWindow: Successfully converted DM tab to window for {player.DisplayName}");
+            return dmWindow;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to convert DM tab to window for {player}: {ex.Message}");
+            Plugin.Log.Error($"ConvertTabToWindow: Stack trace: {ex.StackTrace}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Handles drag and drop operations for DM tabs, including conversion to windows.
+    /// </summary>
+    /// <param name="dmTab">The DM tab being dragged</param>
+    /// <param name="isCtrlHeld">Whether Ctrl key is held during drag</param>
+    /// <param name="isOutsideWindow">Whether the drag is outside the main chat window</param>
+    /// <returns>True if the operation was handled, false otherwise</returns>
+    public bool HandleDMTabDragDrop(DMTab dmTab, bool isCtrlHeld, bool isOutsideWindow)
+    {
+        if (dmTab?.Player == null)
+            return false;
+
+        try
+        {
+            // If Ctrl is held or dragged outside window, convert to window
+            if (isCtrlHeld || isOutsideWindow)
+            {
+                var dmWindow = ConvertTabToWindow(dmTab.Player);
+                if (dmWindow != null)
+                {
+                    if (_plugin != null)
+                    {
+                        _plugin.SaveConfig();
+                    }
+                    return true;
+                }
+            }
+
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to handle DM tab drag and drop for {dmTab.Player}: {ex.Message}");
+            
+            // Show user-friendly error message
+            ShowDragDropError("Failed to convert tab to window", ex);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Shows a user-friendly error message for drag and drop operations.
+    /// </summary>
+    /// <param name="operation">The operation that failed</param>
+    /// <param name="ex">The exception that occurred</param>
+    private void ShowDragDropError(string operation, Exception ex)
+    {
+        try
+        {
+            var errorMessage = $"{operation}: {GetUserFriendlyErrorMessage(ex)}";
+            
+            // Create a system message to display the error
+            var systemMessage = Message.FakeMessage(
+                new List<Chunk>
+                {
+                    new TextChunk(ChunkSource.None, null, $"[DM Error] {errorMessage}")
+                },
+                new ChatCode((ushort)ChatType.Error)
+            );
+            
+            // Add to the current tab if available
+            // TODO: Fix CurrentTab access - need Plugin instance
+            // var currentTab = _plugin?.CurrentTab;
+            // if (currentTab != null)
+            // {
+            //     currentTab.AddMessage(systemMessage, unread: false);
+            // }
+            
+            // For now, just log the error
+            Plugin.Log.Warning($"[DM Error] {errorMessage}");
+        }
+        catch (Exception logEx)
+        {
+            Plugin.Log.Error($"Failed to show drag drop error message: {logEx.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Handles logout behavior for DM windows and tabs based on configuration.
+    /// </summary>
+    public void HandleLogout()
+    {
+        try
+        {
+            if (Plugin.Config.CloseDMsOnLogout == true)
+            {
+                Plugin.Log.Info("Closing all DM windows and tabs due to logout");
+                
+                // Close all DM windows
+                var windowsToClose = _openWindows.Keys.ToList();
+                foreach (var player in windowsToClose)
+                {
+                    CloseDMWindow(player);
+                }
+                
+                // Close all DM tabs
+                var tabsToClose = _openTabs.Keys.ToList();
+                foreach (var player in tabsToClose)
+                {
+                    CloseDMTab(player);
+                }
+                
+                _plugin.SaveConfig();
+            }
+            else
+            {
+                Plugin.Log.Info("Preserving DM windows and tabs after logout");
+                // DM histories are automatically preserved via the _histories dictionary
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to handle logout behavior: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Handles combat state changes for DM windows and tabs based on configuration.
+    /// </summary>
+    /// <param name="inCombat">Whether the player is entering or leaving combat</param>
+    public void HandleCombatStateChange(bool inCombat)
+    {
+        try
+        {
+            if (inCombat && Plugin.Config.CloseDMsInCombat == true)
+            {
+                Plugin.Log.Info("Closing all DM windows due to combat");
+                
+                // Only close windows, not tabs (tabs can stay open but hidden)
+                var windowsToClose = _openWindows.Keys.ToList();
+                foreach (var player in windowsToClose)
+                {
+                    CloseDMWindow(player);
+                }
+                
+                _plugin.SaveConfig();
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to handle combat state change: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Gets the most recently active DM player for keyboard shortcuts.
+    /// </summary>
+    /// <returns>The most recently active DM player or null if none found</returns>
+    public DMPlayer? GetMostRecentDMPlayer()
+    {
+        try
+        {
+            return _histories.Values
+                .Where(h => h.Messages.Count > 0)
+                .OrderByDescending(h => h.LastActivity)
+                .FirstOrDefault()?.Player;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to get most recent DM player: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Focuses a DM window by bringing it to front.
+    /// </summary>
+    /// <param name="dmWindow">The DM window to focus</param>
+    private void FocusDMWindow(DMWindow dmWindow)
+    {
+        if (dmWindow == null)
+            return;
+
+        try
+        {
+            dmWindow.IsOpen = true;
+            dmWindow.BringToFront();
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to focus DM window: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Opens or focuses the most recent DM conversation.
+    /// </summary>
+    /// <returns>True if a DM was opened/focused, false otherwise</returns>
+    public bool OpenRecentDM()
+    {
+        try
+        {
+            var recentPlayer = GetMostRecentDMPlayer();
+            if (recentPlayer == null)
+            {
+                Plugin.Log.Info("No recent DM conversations found");
+                return false;
+            }
+
+            // Check if there's already an open window or tab
+            if (HasOpenDMWindow(recentPlayer))
+            {
+                FocusDMWindow(_openWindows[recentPlayer]);
+                return true;
+            }
+            
+            if (HasOpenDMTab(recentPlayer))
+            {
+                FocusDMTab(_openTabs[recentPlayer]);
+                return true;
+            }
+
+            // Open new DM based on default mode
+            switch (Plugin.Config.DefaultDMMode)
+            {
+                case Configuration.DMDefaultMode.Window:
+                    // TODO: Fix ChatLogWindow access - need Plugin instance
+                    Plugin.Log.Warning("Cannot open DM window without Plugin instance");
+                    break;
+                case Configuration.DMDefaultMode.Tab:
+                default:
+                    OpenDMTab(recentPlayer);
+                    break;
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to open recent DM: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Searches for players by partial name matching.
+    /// </summary>
+    /// <param name="partialName">The partial name to search for</param>
+    /// <returns>List of matching players from DM history</returns>
+    public List<DMPlayer> SearchPlayersByName(string partialName)
+    {
+        if (string.IsNullOrWhiteSpace(partialName))
+            return new List<DMPlayer>();
+
+        try
+        {
+            return _histories.Keys
+                .Where(player => player.Name.Contains(partialName, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(player => _histories[player].LastActivity)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to search players by name '{partialName}': {ex.Message}");
+            return new List<DMPlayer>();
+        }
+    }
+
+    /// <summary>
+    /// Registers DM-related commands.
+    /// </summary>
+    private void RegisterCommands()
+    {
+        try
+        {
+            // TODO: Fix Commands access - need Plugin instance
+            // _plugin?.Commands.Register("/dm", "Open a DM window or tab with a player. Usage: /dm <player name>").Execute += OnDMCommand;
+            Plugin.Log.Info("DM command registration disabled - need Plugin instance");
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to register DM commands: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Subscribes to game events for DM management.
+    /// </summary>
+    private void SubscribeToEvents()
+    {
+        try
+        {
+            // TODO: Fix event subscription - need proper delegate signatures
+            // Plugin.ClientState.Logout += OnLogout;
+            // _plugin?.Condition.ConditionChange += OnConditionChange;
+            Plugin.Log.Info("Event subscription disabled - need proper delegate signatures");
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to subscribe to game events: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Handles the /dm command.
+    /// </summary>
+    /// <param name="command">The command that was executed</param>
+    /// <param name="arguments">The arguments provided with the command</param>
+    private void OnDMCommand(string command, string arguments)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(arguments))
+            {
+                // No arguments - open recent DM
+                if (!OpenRecentDM())
+                {
+                    ShowCommandError("No recent DM conversations found. Usage: /dm <player name>");
+                }
+                return;
+            }
+
+            var playerName = arguments.Trim();
+            
+            // Try to find exact match first
+            var exactMatch = _histories.Keys.FirstOrDefault(p => 
+                string.Equals(p.Name, playerName, StringComparison.OrdinalIgnoreCase));
+            
+            if (exactMatch != null)
+            {
+                OpenDMForPlayer(exactMatch);
+                return;
+            }
+
+            // Try partial match
+            var partialMatches = SearchPlayersByName(playerName);
+            if (partialMatches.Count == 1)
+            {
+                OpenDMForPlayer(partialMatches[0]);
+                return;
+            }
+            
+            if (partialMatches.Count > 1)
+            {
+                var matchNames = string.Join(", ", partialMatches.Take(5).Select(p => p.Name));
+                ShowCommandError($"Multiple players found: {matchNames}. Please be more specific.");
+                return;
+            }
+
+            // No matches found - try to create new DM with current world
+            if (Plugin.ClientState.LocalPlayer != null)
+            {
+                var currentWorld = Plugin.ClientState.LocalPlayer.HomeWorld.RowId;
+                var newPlayer = new DMPlayer(playerName, currentWorld);
+                OpenDMForPlayer(newPlayer);
+            }
+            else
+            {
+                ShowCommandError($"Player '{playerName}' not found in DM history. Make sure you're logged in to start a new conversation.");
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to handle /dm command: {ex.Message}");
+            ShowCommandError("An error occurred while processing the command.");
+        }
+    }
+
+    /// <summary>
+    /// Opens a DM for the specified player based on default mode.
+    /// </summary>
+    /// <param name="player">The player to open a DM for</param>
+    private void OpenDMForPlayer(DMPlayer player)
+    {
+        switch (Plugin.Config.DefaultDMMode)
+        {
+            case Configuration.DMDefaultMode.Window:
+                // TODO: Fix ChatLogWindow access - need Plugin instance
+                Plugin.Log.Warning("Cannot open DM window without Plugin instance");
+                break;
+            case Configuration.DMDefaultMode.Tab:
+            default:
+                OpenDMTab(player);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Shows a command error message to the user.
+    /// </summary>
+    /// <param name="message">The error message to show</param>
+    private void ShowCommandError(string message)
+    {
+        try
+        {
+            var errorMessage = Message.FakeMessage(
+                new List<Chunk>
+                {
+                    new TextChunk(ChunkSource.None, null, $"[DM] {message}")
+                },
+                new ChatCode((ushort)ChatType.Error)
+            );
+            
+            // TODO: Fix CurrentTab access - need Plugin instance
+            // var currentTab = _plugin?.CurrentTab;
+            // if (currentTab != null)
+            // {
+            //     currentTab.AddMessage(errorMessage, unread: false);
+            // }
+            
+            // For now, just log the error
+            Plugin.Log.Warning($"[DM] {message}");
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to show command error: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Handles logout events.
+    /// </summary>
+    private void OnLogout()
+    {
+        HandleLogout();
+    }
+
+    /// <summary>
+    /// Handles condition changes (like combat state).
+    /// </summary>
+    /// <param name="flag">The condition flag that changed</param>
+    /// <param name="value">The new value of the condition</param>
+    private void OnConditionChange(Dalamud.Game.ClientState.Conditions.ConditionFlag flag, bool value)
+    {
+        if (flag == Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat)
+        {
+            HandleCombatStateChange(value);
+        }
+    }
+
+    /// <summary>
+    /// Converts technical exceptions to user-friendly error messages for drag and drop operations.
+    /// </summary>
+    /// <param name="ex">The exception to convert</param>
+    /// <returns>A user-friendly error message</returns>
+    private string GetUserFriendlyErrorMessage(Exception ex)
+    {
+        return ex.Message switch
+        {
+            var msg when msg.Contains("already exists") => "A window for this player is already open",
+            var msg when msg.Contains("not found") => "Could not find the DM conversation",
+            var msg when msg.Contains("access") => "Unable to access DM data",
+            var msg when msg.Contains("memory") => "Insufficient memory to complete operation",
+            _ => "An unexpected error occurred. Please try again."
+        };
+    }
+
+    /// <summary>
+    /// Gets all currently open DM tabs.
+    /// </summary>
+    /// <returns>Collection of open DM tabs</returns>
+    public IEnumerable<DMTab> GetOpenDMTabs()
+    {
+        return _openTabs.Values.ToList();
+    }
+
+    /// <summary>
+    /// Focuses a DM tab by setting it as the current tab.
+    /// </summary>
+    /// <param name="dmTab">The DM tab to focus</param>
+    private void FocusDMTab(DMTab dmTab)
+    {
+        if (dmTab == null)
+            return;
+
+        try
+        {
+            // Mark messages as read when focusing
+            dmTab.MarkAsRead();
+            
+            // Note: Tab focusing will be handled by the UI layer
+            // The WantedTab property is on the Plugin instance, not static
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to focus DM tab: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Handles cleanup when a player logs out or the plugin is disposed.
+    /// </summary>
+    public void CleanupDMTabs()
+    {
+        try
+        {
+            if (Plugin.Config.CloseDMsOnLogout == true)
+            {
+                // Close all DM tabs
+                var tabPlayersToClose = _openTabs.Keys.ToList();
+                foreach (var player in tabPlayersToClose)
+                {
+                    CloseDMTab(player);
+                }
+
+                // Close all DM windows
+                var windowPlayersToClose = _openWindows.Keys.ToList();
+                foreach (var player in windowPlayersToClose)
+                {
+                    CloseDMWindow(player);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to cleanup DM tabs and windows: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Creates a DM tab for a player from their name and world ID.
+    /// This is a convenience method for UI integration.
+    /// </summary>
+    /// <param name="playerName">The player's name</param>
+    /// <param name="worldId">The player's world ID</param>
+    /// <returns>The created DMTab or null if creation failed</returns>
+    public DMTab? CreateDMTabFromPlayerInfo(string playerName, uint worldId)
+    {
+        if (string.IsNullOrEmpty(playerName) || worldId == 0)
+            return null;
+
+        try
+        {
+            var player = new DMPlayer(playerName, worldId);
+            return OpenDMTab(player);
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to create DM tab for {playerName}@{worldId}: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Creates a DM window for a player from their name and world ID.
+    /// This is a convenience method for UI integration.
+    /// </summary>
+    /// <param name="playerName">The player's name</param>
+    /// <param name="worldId">The player's world ID</param>
+    /// <param name="chatLogWindow">The main chat log window instance</param>
+    /// <returns>The created DMWindow or null if creation failed</returns>
+    public DMWindow? CreateDMWindowFromPlayerInfo(string playerName, uint worldId, ChatLogWindow chatLogWindow)
+    {
+        if (string.IsNullOrEmpty(playerName) || worldId == 0 || chatLogWindow == null)
+            return null;
+
+        try
+        {
+            var player = new DMPlayer(playerName, worldId);
+            return OpenDMWindow(player, chatLogWindow);
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to create DM window for {playerName}@{worldId}: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Checks if a DM interface already exists for a player and focuses it.
+    /// This is used for duplicate prevention in context menus.
+    /// </summary>
+    /// <param name="playerName">The player's name</param>
+    /// <param name="worldId">The player's world ID</param>
+    /// <returns>True if an existing DM interface was found and focused, false otherwise</returns>
+    public bool FocusExistingDMInterface(string playerName, uint worldId)
+    {
+        if (string.IsNullOrEmpty(playerName) || worldId == 0)
+            return false;
+
+        try
+        {
+            var player = new DMPlayer(playerName, worldId);
+            
+            // Check for existing DM window first
+            if (_openWindows.TryGetValue(player, out var existingWindow))
+            {
+                // Only focus if the window is actually open
+                if (existingWindow.IsOpen)
+                {
+                    existingWindow.BringToFront();
+                    return true;
+                }
+                else
+                {
+                    // Window exists but is closed, remove it from tracking
+                    _openWindows.TryRemove(player, out _);
+                }
+            }
+            
+            // Check for existing DM tab
+            if (_openTabs.TryGetValue(player, out var existingTab))
+            {
+                FocusDMTab(existingTab);
+                return true;
+            }
+            
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to focus existing DM interface for {playerName}@{worldId}: {ex.Message}");
+            return false;
+        }
+    }
+}
+
