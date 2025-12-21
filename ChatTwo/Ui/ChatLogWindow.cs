@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Globalization;
 using System.Numerics;
 using System.Runtime.InteropServices;
@@ -486,8 +486,28 @@ public sealed class ChatLogWindow : Window
 
     public override void PreDraw()
     {
-        if (Plugin.Config.KeepInputFocus && Activate)
-            ImGui.SetWindowFocus(WindowName);
+        // CRITICAL: Completely disable focus management to prevent context menu interference
+        // The aggressive focus management was causing context menus to close immediately
+        // due to focus fighting between Chat 2 window and Dalamud Console
+        // 
+        // Original issue: Right-click opens context menu, but focus switching immediately closes it
+        // Solution: Don't set window focus at all - let ImGui handle focus naturally
+        
+        // Only set focus in very specific cases where we absolutely need it
+        // and we're certain it won't interfere with context menus
+        var shouldSetFocus = Plugin.Config.KeepInputFocus && 
+                           Activate && 
+                           !ImGui.IsPopupOpen("", ImGuiPopupFlags.AnyPopupId) &&
+                           !ImGui.IsAnyMouseDown() && // Don't set focus if mouse is being used (potential right-click)
+                           GetActiveDMTab() == null; // Don't set focus when DM tabs are active
+        
+        if (shouldSetFocus)
+        {
+            // Additional safety check - only set focus if no window has focus
+            // This prevents stealing focus from other windows
+            if (ImGui.GetIO().WantCaptureMouse == false)
+                ImGui.SetWindowFocus(WindowName);
+        }
 
         // Apply existing style first
         if (Plugin.Config is { OverrideStyle: true, ChosenStyle: not null })
@@ -504,6 +524,11 @@ public sealed class ChatLogWindow : Window
         // Activate gets disabled is via the text input callback, but that
         // doesn't get called if the input is disabled.
         if (Plugin.CurrentTab.InputDisabled)
+            Activate = false;
+            
+        // CRITICAL: Also reset Activate flag when DM tabs are active to prevent focus fighting
+        // This prevents the aggressive focus management from interfering with context menus
+        if (GetActiveDMTab() != null)
             Activate = false;
 
         // End modern styling
@@ -557,6 +582,713 @@ public sealed class ChatLogWindow : Window
         if (IsChatMode && Plugin.InputPreview.IsDrawable)
             Plugin.InputPreview.CalculatePreview();
 
+        // CRITICAL TEST: Check if we have any DM tabs at all
+        var hasDMTabs = Plugin.Config.Tabs.Any(tab => !tab.PopOut && tab is DMTab);
+        
+        if (hasDMTabs)
+        {
+            // Use the dual-row tab system only when DM tabs exist
+            DrawDualRowTabSystem();
+        }
+        else
+        {
+            // FALLBACK: Use original chat drawing when no DM tabs exist
+            // This will help us test if the dual-row system is causing the context menu issue
+            DrawOriginalChatSystem();
+        }
+    }
+
+    private void DrawOriginalChatSystem()
+    {
+        // FALLBACK: Use the original chat drawing system to test if dual-row system causes context menu issues
+        // This is the original implementation before DM tabs were added
+        
+        if (Plugin.Config.SidebarTabView)
+            DrawTabSidebar();
+        else
+            DrawTabBar();
+
+        var activeTab = Plugin.CurrentTab;
+        if (activeTab == null)
+            return;
+
+        // Draw the input area for the active tab using the regular chat input method
+        DrawRegularChatInput(activeTab);
+    }
+
+    // Add fields to track DM pane state and animation
+    private bool _dmPaneCollapsed = true; // Start collapsed by default
+    private bool _dmPaneManuallyCollapsed = false; // Track if user manually collapsed the pane
+    private float _dmPaneAnimationProgress = 0f;
+    private bool _dmPaneAnimating = false;
+    private long _dmPaneAnimationStartTime = 0;
+    private const float DM_PANE_ANIMATION_DURATION = 300f; // milliseconds
+    
+    // DM input field state
+    private string _dmInputText = string.Empty;
+
+    private void DrawDualRowTabSystem()
+    {
+        // First row: DM tabs only (at the very top)
+        DrawDMTabRow();
+        
+        // Get the active DM tab (if any)
+        var activeDMTab = GetActiveDMTab();
+        
+        // Calculate DM pane height based on regular chat height
+        var totalAvailableHeight = ImGui.GetContentRegionAvail().Y;
+        var dmPaneHeight = totalAvailableHeight * 0.5f; // Use 50% of available height, same as regular chat
+        
+        var shouldShowDMPane = activeDMTab != null && !_dmPaneCollapsed;
+        
+        // Handle animation
+        UpdateDMPaneAnimation(shouldShowDMPane);
+        
+        // Get animated height based on progress
+        var animatedDMPaneHeight = dmPaneHeight * _dmPaneAnimationProgress;
+        
+        // Handle window size expansion upward
+        HandleWindowExpansion(shouldShowDMPane, animatedDMPaneHeight);
+        
+        // Draw DM pane if active and not collapsed
+        if (animatedDMPaneHeight > 0 && activeDMTab != null)
+        {
+            DrawDMPane(activeDMTab, animatedDMPaneHeight);
+        }
+        
+        // Calculate remaining height for regular chat area after DM pane
+        var remainingHeight = ImGui.GetContentRegionAvail().Y;
+        
+        // Draw regular chat area with the remaining space
+        DrawRegularChatArea(remainingHeight);
+    }
+
+    // Track window expansion state
+    private Vector2 _originalWindowSize = Vector2.Zero;
+    private Vector2 _originalWindowPos = Vector2.Zero;
+    private bool _hasStoredOriginalWindow = false;
+    private float _lastDMPaneHeight = 0f;
+
+    private void HandleWindowExpansion(bool shouldShowDMPane, float animatedHeight)
+    {
+        // Store original window size and position when first showing DM pane
+        if (shouldShowDMPane && !_hasStoredOriginalWindow && animatedHeight > 5.0f)
+        {
+            _originalWindowSize = ImGui.GetWindowSize();
+            _originalWindowPos = ImGui.GetWindowPos();
+            _hasStoredOriginalWindow = true;
+        }
+        
+        // Only adjust window size if we have stored the original and there's a significant change
+        if (_hasStoredOriginalWindow)
+        {
+            var heightDifference = animatedHeight - _lastDMPaneHeight;
+            
+            // Use a larger threshold to prevent micro-adjustments that cause glitchiness
+            if (Math.Abs(heightDifference) > 3.0f)
+            {
+                var currentPos = ImGui.GetWindowPos();
+                
+                // Expand window upward: move position up and increase height
+                var newPos = new Vector2(currentPos.X, currentPos.Y - heightDifference);
+                var newSize = new Vector2(_originalWindowSize.X, _originalWindowSize.Y + animatedHeight);
+                
+                ImGui.SetWindowPos(newPos);
+                ImGui.SetWindowSize(newSize);
+            }
+            
+            // Reset to original when DM pane is completely hidden
+            if (!shouldShowDMPane && animatedHeight <= 5.0f)
+            {
+                ImGui.SetWindowPos(_originalWindowPos);
+                ImGui.SetWindowSize(_originalWindowSize);
+                _hasStoredOriginalWindow = false;
+            }
+        }
+        
+        _lastDMPaneHeight = animatedHeight;
+    }
+
+    private void DrawRegularChatArea(float availableHeight)
+    {
+        // CRITICAL FIX: Don't use child window for regular chat area as it interferes with context menus
+        // The nested child windows were blocking right-click events from reaching the message area
+        
+        // Draw regular tabs right above the chat content
+        DrawRegularTabRow();
+        
+        // Get the active regular tab (not DM tab)
+        var activeRegularTab = GetActiveRegularTab();
+        if (activeRegularTab == null)
+            return;
+
+        // Calculate remaining height for message log and input
+        var remainingHeight = ImGui.GetContentRegionAvail().Y;
+        var inputHeight = ImGui.GetFrameHeightWithSpacing() * 2; // Reserve space for channel name + input
+        var messageHeight = remainingHeight - inputHeight;
+        
+        // Ensure we have minimum space for input
+        if (messageHeight < 50) // Minimum message area height
+        {
+            messageHeight = 50;
+            inputHeight = remainingHeight - messageHeight;
+        }
+        
+        // Draw message log for the active regular tab - NO CHILD WINDOW to avoid blocking context menus
+        DrawMessageLog(activeRegularTab, PayloadHandler, messageHeight, false);
+
+        // Draw channel name
+        using (ImRaii.PushStyle(ImGuiStyleVar.ItemSpacing, Vector2.Zero))
+        {
+            DrawChannelName(activeRegularTab);
+        }
+
+        // Draw channel selector and input for regular chat
+        DrawRegularChatInput(activeRegularTab);
+    }
+
+    private void UpdateDMPaneAnimation(bool shouldShowDMPane)
+    {
+        var currentTime = Environment.TickCount64;
+        
+        // Start animation if state changed
+        if (shouldShowDMPane != _previousDMPaneVisible)
+        {
+            _dmPaneAnimating = true;
+            _dmPaneAnimationStartTime = currentTime;
+            _previousDMPaneVisible = shouldShowDMPane;
+        }
+        
+        // Update animation progress
+        if (_dmPaneAnimating)
+        {
+            var elapsed = currentTime - _dmPaneAnimationStartTime;
+            var progress = Math.Min(elapsed / DM_PANE_ANIMATION_DURATION, 1.0f);
+            
+            // Use easing function for smooth animation (ease-out)
+            var easedProgress = 1f - (float)Math.Pow(1f - progress, 3f);
+            
+            if (shouldShowDMPane)
+            {
+                _dmPaneAnimationProgress = easedProgress;
+            }
+            else
+            {
+                _dmPaneAnimationProgress = 1f - easedProgress;
+            }
+            
+            // Animation complete - use a more conservative threshold
+            if (progress >= 0.95f)
+            {
+                _dmPaneAnimating = false;
+                _dmPaneAnimationProgress = shouldShowDMPane ? 1f : 0f;
+            }
+        }
+        else
+        {
+            // No animation, set target state immediately
+            _dmPaneAnimationProgress = shouldShowDMPane ? 1f : 0f;
+        }
+    }
+
+    // Track previous DM pane state for animation
+    private bool _previousDMPaneVisible = false;
+
+    private void DrawDMTabRow()
+    {
+        var dmTabs = Plugin.Config.Tabs
+            .Select((tab, index) => new { tab, index })
+            .Where(x => !x.tab.PopOut && x.tab is DMTab)
+            .ToList();
+
+        if (dmTabs.Count == 0)
+            return;
+
+        using (ModernUI.PushModernTabStyle(Plugin.Config))
+        using (var tabBar = ImRaii.TabBar("##dm-tabs"))
+        {
+            if (!tabBar.Success)
+                return;
+
+            foreach (var dmTabInfo in dmTabs)
+            {
+                var dmTab = (DMTab)dmTabInfo.tab;
+                var tabIndex = dmTabInfo.index;
+                
+                var unread = dmTab.Unread == 0 ? "" : $" •{dmTab.Unread}";
+                var tabLabel = $"💬 {dmTab.Player.Name}{unread}";
+                
+                // Check if this is the active DM tab
+                var isActiveDMTab = Plugin.LastTab == tabIndex;
+                var flags = ImGuiTabItemFlags.None;
+                
+                // Add visual indicator for active DM tab with pane
+                if (isActiveDMTab && !_dmPaneCollapsed)
+                {
+                    // Add a subtle glow or different styling for the connected tab
+                    using var colorPush = ImRaii.PushColor(ImGuiCol.TabActive, 
+                        ImGui.GetColorU32(ImGuiCol.TabActive) | 0xFF000020); // Slight blue tint
+                }
+                
+                using var tabItem = ImRaii.TabItem($"{tabLabel}###dm-tab-{tabIndex}", flags);
+                
+                if (tabItem.Success)
+                {
+                    var hasTabSwitched = Plugin.LastTab != tabIndex;
+                    Plugin.LastTab = tabIndex;
+                    
+                    // Auto-expand DM pane when clicking DM tab (only if currently collapsed AND not manually collapsed)
+                    // OR when switching to a different DM tab (reset manual collapse on tab switch)
+                    if (_dmPaneCollapsed && (!_dmPaneManuallyCollapsed || hasTabSwitched))
+                    {
+                        _dmPaneCollapsed = false;
+                        _dmPaneManuallyCollapsed = false; // Reset manual collapse flag when expanding
+                        _dmPaneAnimating = true;
+                        _dmPaneAnimationStartTime = Environment.TickCount64;
+                    }
+                    
+                    if (hasTabSwitched)
+                    {
+                        var previousTab = Plugin.Config.Tabs.ElementAtOrDefault(Plugin.LastTab);
+                        if (previousTab != null)
+                            TabSwitched(dmTab, previousTab);
+                    }
+                    
+                    // Clear unread for this DM tab
+                    dmTab.Unread = 0;
+                    dmTab.MarkAsRead();
+                }
+                
+                // Add context menu for DM tabs
+                DrawDMTabContextMenu(dmTab, tabIndex);
+            }
+            
+            // Add collapse/expand button at the end of DM tab row if there's an active DM tab
+            var activeDMTab = GetActiveDMTab();
+            if (activeDMTab != null)
+            {
+                ImGui.SameLine();
+                ImGui.Spacing();
+                ImGui.SameLine();
+                
+                using (ModernUI.PushModernButtonStyle(Plugin.Config))
+                {
+                    // Button should only show "Collapse" when pane is visible, always show "Expand" when collapsed
+                    var isPaneVisible = !_dmPaneCollapsed && _dmPaneAnimationProgress > 0.1f;
+                    var buttonText = isPaneVisible ? "▲ Hide" : "▼ Show";
+                    
+                    if (ImGui.SmallButton(buttonText))
+                    {
+                        if (_dmPaneCollapsed)
+                        {
+                            // User wants to expand - clear manual collapse flag and expand
+                            _dmPaneCollapsed = false;
+                            _dmPaneManuallyCollapsed = false;
+                        }
+                        else
+                        {
+                            // User wants to collapse - set manual collapse flag and collapse
+                            _dmPaneCollapsed = true;
+                            _dmPaneManuallyCollapsed = true;
+                        }
+                        
+                        _dmPaneAnimating = true;
+                        _dmPaneAnimationStartTime = Environment.TickCount64;
+                    }
+                }
+                
+                // Add tooltip
+                if (ImGui.IsItemHovered())
+                {
+                    var isPaneVisible = !_dmPaneCollapsed && _dmPaneAnimationProgress > 0.1f;
+                    var tooltipText = isPaneVisible ? "Hide DM conversation" : "Show DM conversation";
+                    ModernUI.DrawModernTooltip(tooltipText, Plugin.Config);
+                }
+            }
+        }
+    }
+
+    private void DrawRegularTabRow()
+    {
+        var regularTabs = Plugin.Config.Tabs
+            .Select((tab, index) => new { tab, index })
+            .Where(x => !x.tab.PopOut && !(x.tab is DMTab))
+            .ToList();
+
+        if (regularTabs.Count == 0)
+            return;
+
+        using (ModernUI.PushModernTabStyle(Plugin.Config))
+        using (var tabBar = ImRaii.TabBar("##regular-tabs"))
+        {
+            if (!tabBar.Success)
+                return;
+
+            foreach (var tabInfo in regularTabs)
+            {
+                var tab = tabInfo.tab;
+                var tabIndex = tabInfo.index;
+                
+                var unread = tab.Unread == 0 ? "" : $" ({tab.Unread})";
+                var tabLabel = tab.Name + unread;
+                
+                if (Plugin.Config.ModernUIEnabled && Plugin.Config.ShowTabIcons)
+                {
+                    var icon = ModernUI.GetTabIcon(tab);
+                    tabLabel = $"{icon.ToIconString()} {tab.Name}{unread}";
+                }
+
+                // Let ImGui handle tab selection naturally - no forced selection
+                using var tabItem = ImRaii.TabItem($"{tabLabel}###regular-tab-{tabIndex}");
+                
+                if (tabItem.Success)
+                {
+                    // This tab is now active - update our tracking
+                    SetActiveRegularTab(tabIndex);
+                    
+                    // Clear unread for this tab
+                    tab.Unread = 0;
+                }
+                
+                // Add context menu for regular tabs
+                DrawTabContextMenu(tab, tabIndex);
+            }
+        }
+    }
+
+    // Track the active regular tab separately from the main Plugin.LastTab
+    private int _activeRegularTabIndex = 0;
+
+    private int GetActiveRegularTabIndex()
+    {
+        // Find the first regular tab if our stored index is invalid
+        var regularTabs = Plugin.Config.Tabs
+            .Select((tab, index) => new { tab, index })
+            .Where(x => !x.tab.PopOut && !(x.tab is DMTab))
+            .ToList();
+
+        if (regularTabs.Count == 0)
+            return -1;
+
+        // Check if our stored index is still valid
+        var storedTab = regularTabs.FirstOrDefault(x => x.index == _activeRegularTabIndex);
+        if (storedTab != null)
+            return _activeRegularTabIndex;
+
+        // Default to first regular tab
+        _activeRegularTabIndex = regularTabs[0].index;
+        return _activeRegularTabIndex;
+    }
+
+    private void SetActiveRegularTab(int tabIndex)
+    {
+        _activeRegularTabIndex = tabIndex;
+    }
+
+    private DMTab? GetActiveDMTab()
+    {
+        if (Plugin.LastTab >= 0 && Plugin.LastTab < Plugin.Config.Tabs.Count)
+        {
+            var activeTab = Plugin.Config.Tabs[Plugin.LastTab];
+            if (activeTab is DMTab dmTab && !activeTab.PopOut)
+                return dmTab;
+        }
+        return null;
+    }
+
+    private void DrawDMPane(DMTab activeDMTab, float height)
+    {
+        // Add fade-in effect based on animation progress
+        var alpha = _dmPaneAnimationProgress;
+        using var alphaScope = ImRaii.PushStyle(ImGuiStyleVar.Alpha, alpha);
+        
+        // Add subtle border to connect with the tab above
+        var borderColor = ImGui.GetColorU32(ImGuiCol.Border);
+        var drawList = ImGui.GetWindowDrawList();
+        var panePos = ImGui.GetCursorScreenPos();
+        var paneSize = new Vector2(ImGui.GetContentRegionAvail().X, height);
+        
+        // Draw connecting line from DM tab to pane (visual connection)
+        if (alpha > 0.1f)
+        {
+            var lineColor = ImGui.GetColorU32(ImGuiCol.TabActive);
+            drawList.AddLine(
+                new Vector2(panePos.X, panePos.Y - 2),
+                new Vector2(panePos.X + paneSize.X, panePos.Y - 2),
+                lineColor,
+                2.0f * alpha
+            );
+        }
+        
+        using (var dmChild = ImRaii.Child("##dm-conversation", new Vector2(-1, height), true, ImGuiWindowFlags.NoScrollbar))
+        {
+            if (dmChild.Success)
+            {
+                // Enhanced header with better visual connection
+                var headerColor = ImGui.GetColorU32(ImGuiCol.TabActive) & 0x00FFFFFF | ((uint)(alpha * 40) << 24);
+                drawList.AddRectFilled(
+                    ImGui.GetCursorScreenPos(),
+                    ImGui.GetCursorScreenPos() + new Vector2(ImGui.GetContentRegionAvail().X, ImGui.GetFrameHeight() + 8),
+                    headerColor
+                );
+                
+                ImGui.Spacing();
+                
+                // DM header with player name and status
+                ImGui.Text($"💬 Direct Message: {activeDMTab.Player.Name}");
+                
+                ImGui.SameLine(ImGui.GetContentRegionAvail().X - 120);
+                
+                // Pop out button with animation
+                using (ModernUI.PushModernButtonStyle(Plugin.Config))
+                {
+                    if (ImGuiUtil.IconButton(FontAwesomeIcon.ExternalLinkAlt, "Pop out to window"))
+                    {
+                        DMManager.Instance.ConvertTabToWindow(activeDMTab.Player);
+                    }
+                }
+
+                ImGui.SameLine();
+
+                // Close DM button with animation
+                using (ModernUI.PushModernButtonStyle(Plugin.Config))
+                {
+                    if (ImGuiUtil.IconButton(FontAwesomeIcon.Times, "Close DM"))
+                    {
+                        // Properly collapse the pane and set manual collapse flag
+                        _dmPaneCollapsed = true;
+                        _dmPaneManuallyCollapsed = true; // Prevent auto-expand from reopening
+                        _dmPaneAnimating = true;
+                        _dmPaneAnimationStartTime = Environment.TickCount64;
+                        
+                        // Switch to first regular tab after a short delay
+                        var firstRegularTab = Plugin.Config.Tabs
+                            .Select((tab, index) => new { tab, index })
+                            .FirstOrDefault(x => !x.tab.PopOut && !(x.tab is DMTab));
+                        
+                        if (firstRegularTab != null)
+                        {
+                            Plugin.WantedTab = firstRegularTab.index;
+                        }
+                    }
+                }
+                
+                ImGui.Spacing();
+                
+                // Animated separator
+                var separatorAlpha = Math.Min(alpha * 2f, 1f);
+                using var sepAlpha = ImRaii.PushStyle(ImGuiStyleVar.Alpha, separatorAlpha);
+                ImGui.Separator();
+
+                // DM message area with smooth scrolling
+                var messageHeight = ImGui.GetContentRegionAvail().Y - 40; // Reserve space for input
+                using (var messageChild = ImRaii.Child("##dm-messages", new Vector2(-1, messageHeight)))
+                {
+                    if (messageChild.Success)
+                    {
+                        // Add subtle background for message area
+                        var msgBgColor = ImGui.GetColorU32(ImGuiCol.FrameBg) & 0x00FFFFFF | ((uint)(alpha * 20) << 24);
+                        drawList.AddRectFilled(
+                            ImGui.GetCursorScreenPos(),
+                            ImGui.GetCursorScreenPos() + new Vector2(ImGui.GetContentRegionAvail().X, messageHeight),
+                            msgBgColor
+                        );
+                        
+                        DrawMessageLog(activeDMTab, PayloadHandler, messageHeight, false);
+                    }
+                }
+
+                // DM input area with enhanced styling
+                DrawDMInputArea(activeDMTab, alpha);
+            }
+        }
+    }
+
+    private void DrawDMInputArea(DMTab dmTab, float alpha = 1f)
+    {
+        try
+        {
+            var inputWidth = ImGui.GetContentRegionAvail().X - 80; // Reserve space for send button
+            
+            ImGui.SetNextItemWidth(inputWidth);
+            
+            var placeholder = $"Message {dmTab.Player.Name}...";
+            
+            // Use simple InputText instead of InputTextWithHint to avoid crashes
+            // Don't auto-focus to avoid interfering with context menus
+            var inputFlags = ImGuiInputTextFlags.EnterReturnsTrue;
+            
+            // Ensure _dmInputText is never null
+            _dmInputText ??= string.Empty;
+            
+            // Draw placeholder text manually if input is empty
+            if (string.IsNullOrEmpty(_dmInputText))
+            {
+                var placeholderColor = ImGui.GetColorU32(ImGuiCol.TextDisabled);
+                var drawList = ImGui.GetWindowDrawList();
+                var cursorPos = ImGui.GetCursorScreenPos();
+                
+                // Draw the input field first
+                var inputResult = false;
+                try
+                {
+                    inputResult = ImGui.InputText("##dm-input", ref _dmInputText, 500, inputFlags);
+                }
+                catch (Exception inputEx)
+                {
+                    Plugin.Log.Warning(inputEx, "InputText failed, using fallback");
+                    // Fallback: just show instruction text
+                    ImGui.Text($"Input error - use: /tell {dmTab.Player.DisplayName} <message>");
+                    return;
+                }
+                
+                if (inputResult && !string.IsNullOrWhiteSpace(_dmInputText))
+                {
+                    SendDMMessage(dmTab, _dmInputText);
+                    _dmInputText = string.Empty; // Clear input after sending
+                }
+                
+                // Draw placeholder text over the input if it's empty and not focused
+                if (string.IsNullOrEmpty(_dmInputText) && !ImGui.IsItemActive())
+                {
+                    try
+                    {
+                        var padding = ImGui.GetStyle().FramePadding;
+                        drawList.AddText(new Vector2(cursorPos.X + padding.X, cursorPos.Y + padding.Y), placeholderColor, placeholder);
+                    }
+                    catch (Exception drawEx)
+                    {
+                        Plugin.Log.Debug(drawEx, "Failed to draw placeholder text");
+                        // Non-critical, continue without placeholder
+                    }
+                }
+            }
+            else
+            {
+                // Normal input when there's text
+                var inputResult = false;
+                try
+                {
+                    inputResult = ImGui.InputText("##dm-input", ref _dmInputText, 500, inputFlags);
+                }
+                catch (Exception inputEx)
+                {
+                    Plugin.Log.Warning(inputEx, "InputText failed, clearing input");
+                    _dmInputText = string.Empty; // Clear potentially corrupted input
+                    return;
+                }
+                
+                if (inputResult && !string.IsNullOrWhiteSpace(_dmInputText))
+                {
+                    SendDMMessage(dmTab, _dmInputText);
+                    _dmInputText = string.Empty; // Clear input after sending
+                }
+            }
+            
+            ImGui.SameLine();
+            
+            // Send button
+            var sendEnabled = !string.IsNullOrWhiteSpace(_dmInputText);
+            using var disabled = ImRaii.Disabled(!sendEnabled);
+            
+            if (ImGui.Button("Send") && sendEnabled)
+            {
+                SendDMMessage(dmTab, _dmInputText);
+                _dmInputText = string.Empty; // Clear input after sending
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error(ex, "Critical error in DrawDMInputArea, falling back to instruction text");
+            
+            // Fallback to instruction text if anything goes wrong
+            ImGui.Text($"DM input error - use regular chat:");
+            ImGui.Text($"/tell {dmTab.Player.DisplayName} <message>");
+            
+            // Reset input state to prevent recurring errors
+            _dmInputText = string.Empty;
+        }
+    }
+    
+    private void SendDMMessage(DMTab dmTab, string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+            return;
+            
+        var trimmed = message.Trim();
+        
+        // Send the message as a tell to the DM target
+        var tellCommand = $"/tell {dmTab.Player.DisplayName} {trimmed}";
+        
+        // Track outgoing tell for proper routing
+        Plugin.DMMessageRouter.TrackOutgoingTell(dmTab.Player);
+        
+        // Send the tell command
+        ChatBox.SendMessage(tellCommand);
+    }
+
+    private Tab? GetActiveRegularTab()
+    {
+        var activeRegularTabIndex = GetActiveRegularTabIndex();
+        if (activeRegularTabIndex >= 0 && activeRegularTabIndex < Plugin.Config.Tabs.Count)
+        {
+            var tab = Plugin.Config.Tabs[activeRegularTabIndex];
+            if (!(tab is DMTab) && !tab.PopOut)
+                return tab;
+        }
+        
+        // Fallback to first regular tab
+        return Plugin.Config.Tabs
+            .FirstOrDefault(tab => !tab.PopOut && !(tab is DMTab));
+    }
+
+    private void DrawDMTabContextMenu(DMTab dmTab, int tabIndex)
+    {
+        using var contextMenu = ImRaii.ContextPopupItem($"dm-tab-context-menu-{tabIndex}");
+        if (!contextMenu.Success)
+            return;
+
+        if (ImGui.MenuItem("Pop Out to Window"))
+        {
+            DMManager.Instance.ConvertTabToWindow(dmTab.Player);
+        }
+        
+        if (ImGui.MenuItem("Close DM"))
+        {
+            DMManager.Instance.CloseDMTab(dmTab.Player);
+        }
+        
+        ImGui.Separator();
+        
+        if (ImGui.MenuItem("Add Friend"))
+        {
+            try
+            {
+                var friendCommand = $"/friendlist add {dmTab.Player.DisplayName}";
+                ChatBox.SendMessage(friendCommand);
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.Error($"Failed to add {dmTab.Player} as friend: {ex.Message}");
+            }
+        }
+        
+        if (ImGui.MenuItem("Invite to Party"))
+        {
+            try
+            {
+                var inviteCommand = $"/invite {dmTab.Player.DisplayName}";
+                ChatBox.SendMessage(inviteCommand);
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.Error($"Failed to invite {dmTab.Player} to party: {ex.Message}");
+            }
+        }
+    }
+
+    private unsafe void DrawNormalChatPane()
+    {
         if (Plugin.Config.SidebarTabView)
             DrawTabSidebar();
         else
@@ -777,6 +1509,171 @@ public sealed class ChatLogWindow : Window
         }
     }
 
+    private void DrawRegularChatInput(Tab activeTab)
+    {
+        var beforeIcon = ImGui.GetCursorPos();
+        using (ModernUI.PushModernButtonStyle(Plugin.Config))
+        {
+            if (ImGuiUtil.IconButton(FontAwesomeIcon.Comment) && activeTab.Channel is null)
+                ImGui.OpenPopup(ChatChannelPicker);
+        }
+
+        if (activeTab.Channel is not null && ImGui.IsItemHovered())
+            ModernUI.DrawModernTooltip(Language.ChatLog_SwitcherDisabled, Plugin.Config);
+
+        using (var popup = ImRaii.Popup(ChatChannelPicker))
+        {
+            if (popup)
+            {
+                var channels = GetValidChannels();
+                foreach (var (name, channel) in channels)
+                    if (ImGui.Selectable(name))
+                        SetChannel(channel);
+            }
+        }
+
+        ImGui.SameLine();
+        var afterIcon = ImGui.GetCursorPos();
+
+        var buttonWidth = afterIcon.X - beforeIcon.X;
+        var showNovice = Plugin.Config.ShowNoviceNetwork && GameFunctions.GameFunctions.IsMentor();
+        var buttonsRight = (showNovice ? 1 : 0) + (Plugin.Config.ShowHideButton ? 1 : 0);
+        var inputWidth = ImGui.GetContentRegionAvail().X - buttonWidth * (1 + buttonsRight);
+
+        var inputType = activeTab.CurrentChannel.UseTempChannel ? activeTab.CurrentChannel.TempChannel.ToChatType() : activeTab.CurrentChannel.Channel.ToChatType();
+        var isCommand = Chat.Trim().StartsWith('/');
+        if (isCommand)
+        {
+            var command = Chat.Split(' ')[0];
+            if (TextCommandChannels.TryGetValue(command, out var channel))
+                inputType = channel;
+
+            if (!IsValidCommand(command))
+                inputType = ChatType.Error;
+        }
+
+        var normalColor = ImGui.GetColorU32(ImGuiCol.Text);
+        var inputColour = Plugin.Config.ChatColours.TryGetValue(inputType, out var inputCol) ? inputCol : inputType.DefaultColor();
+
+        if (!isCommand && Plugin.ExtraChat.ChannelOverride is var (_, overrideColour))
+            inputColour = overrideColour;
+
+        if (isCommand && Plugin.ExtraChat.ChannelCommandColours.TryGetValue(Chat.Split(' ')[0], out var ecColour))
+            inputColour = ecColour;
+
+        var push = inputColour != null;
+        using (ImRaii.PushColor(ImGuiCol.Text, push ? ColourUtil.RgbaToAbgr(inputColour!.Value) : 0, push))
+        {
+            var isChatEnabled = activeTab is { InputDisabled: false };
+            if (isChatEnabled && (Activate || FocusedPreview))
+            {
+                FocusedPreview = false;
+                ImGui.SetKeyboardFocusHere();
+            }
+
+            using (ImRaii.Disabled(!isChatEnabled))
+            {
+                var flags = InputFlags | (!isChatEnabled ? ImGuiInputTextFlags.ReadOnly : ImGuiInputTextFlags.None);
+                ImGui.SetNextItemWidth(inputWidth);
+                
+                var hasError = isCommand && !IsValidCommand(Chat.Split(' ')[0]);
+                var (styleScope, colorScope) = ModernUI.PushEnhancedInputStyle(Plugin.Config, InputFocused, hasError);
+                using (styleScope)
+                using (colorScope)
+                {
+                    var placeholder = isChatEnabled ? "Type your message..." : Language.ChatLog_DisabledInput;
+                    ImGui.InputTextWithHint("##regular-chat-input", placeholder, ref Chat, 500, flags, Callback);
+                }
+            }
+            var inputActive = ImGui.IsItemActive();
+            InputFocused = isChatEnabled && inputActive;
+
+            // Handle input deactivation
+            if (ImGui.IsItemDeactivated())
+            {
+                if (ImGui.IsKeyDown(ImGuiKey.Escape))
+                {
+                    Chat = "";
+                    if (activeTab.CurrentChannel.UseTempChannel)
+                        activeTab.CurrentChannel.ResetTempChannel();
+                }
+
+                if (ImGui.IsKeyDown(ImGuiKey.Enter) || ImGui.IsKeyDown(ImGuiKey.KeypadEnter))
+                {
+                    Plugin.CommandHelpWindow.IsOpen = false;
+                    SendChatBox(activeTab);
+
+                    if (activeTab.CurrentChannel.UseTempChannel)
+                    {
+                        activeTab.CurrentChannel.ResetTempChannel();
+                        SetChannel(activeTab.CurrentChannel.Channel);
+                    }
+                }
+            }
+
+            // Process keybinds that have modifiers while the chat is focused.
+            if (inputActive)
+            {
+                Plugin.Functions.KeybindManager.HandleKeybinds(KeyboardSource.ImGui, true, true);
+                LastActivityTime = FrameTime;
+            }
+
+            // Only trigger unfocused if we are currently not calling the auto complete
+            if (!Activate && !inputActive && AutoCompleteInfo == null)
+            {
+                if (Plugin.Config.PlaySounds && !PlayedClosingSound)
+                {
+                    PlayedClosingSound = true;
+                    UIGlobals.PlaySoundEffect(ChatCloseSfx);
+                }
+
+                if (activeTab.CurrentChannel.UseTempChannel)
+                {
+                    activeTab.CurrentChannel.ResetTempChannel();
+                    SetChannel(Plugin.CurrentTab.CurrentChannel.Channel);
+                }
+            }
+
+            using (var context = ImRaii.ContextPopupItem("ChatInputContext"))
+            {
+                if (context)
+                {
+                    using var pushedColor = ImRaii.PushColor(ImGuiCol.Text, normalColor);
+                    if (ImGui.Selectable(Language.ChatLog_HideChat))
+                        UserHide();
+                }
+            }
+        }
+
+        ImGui.SameLine();
+
+        using (ModernUI.PushModernButtonStyle(Plugin.Config))
+        {
+            if (ImGuiUtil.IconButton(FontAwesomeIcon.Cog, width: (int)buttonWidth))
+                Plugin.SettingsWindow.Toggle();
+        }
+
+        if (Plugin.Config.ShowHideButton)
+        {
+            ImGui.SameLine();
+            using (ModernUI.PushModernButtonStyle(Plugin.Config))
+            {
+                if (ImGuiUtil.IconButton(FontAwesomeIcon.EyeSlash, width: (int)buttonWidth))
+                    UserHide();
+            }
+        }
+
+        if (showNovice)
+        {
+            ImGui.SameLine();
+            using (ModernUI.PushModernButtonStyle(Plugin.Config))
+            {
+                if (ImGuiUtil.IconButton(FontAwesomeIcon.Leaf))
+                    GameFunctions.GameFunctions.ClickNoviceNetworkButton();
+            }
+        }
+    }
+
     internal Dictionary<string, InputChannel> GetValidChannels()
     {
         var channels = new Dictionary<string, InputChannel>();
@@ -987,11 +1884,9 @@ public sealed class ChatLogWindow : Window
             {
                 try
                 {
-                    Plugin.Log.Debug($"SendChatBox: Handling DM tab message to {dmTab.Player.DisplayName}: '{trimmed}'");
-                    
+                    // Handle DM tab message sending
                     if (trimmed.StartsWith('/'))
                     {
-                        Plugin.Log.Debug($"SendChatBox: Sending command directly: {trimmed}");
                         // Commands are sent as-is (not as tells)
                         ChatBox.SendMessage(trimmed);
                     }
@@ -999,16 +1894,12 @@ public sealed class ChatLogWindow : Window
                     {
                         // Non-command messages are sent as tells to the DM target
                         var tellCommand = $"/tell {dmTab.Player.DisplayName} {trimmed}";
-                        Plugin.Log.Debug($"SendChatBox: Sending tell command: {tellCommand}");
                         
-                        // CRITICAL: Track this outgoing tell BEFORE sending for error message routing
-                        Plugin.Log.Debug($"SendChatBox: Tracking outgoing tell to {dmTab.Player.DisplayName}");
+                        // Track this outgoing tell BEFORE sending for error message routing
                         Plugin.DMMessageRouter.TrackOutgoingTell(dmTab.Player);
-                        Plugin.Log.Debug($"SendChatBox: Outgoing tell tracked successfully");
                         
                         // Send the tell command - the game will echo it back as TellOutgoing
                         ChatBox.SendMessage(tellCommand);
-                        Plugin.Log.Debug($"SendChatBox: Tell command sent successfully");
                         
                         // NOTE: We don't display the outgoing message here because the game
                         // will echo the tell back as a TellOutgoing message which will be
@@ -1018,8 +1909,7 @@ public sealed class ChatLogWindow : Window
                 }
                 catch (Exception ex)
                 {
-                    Plugin.Log.Error($"SendChatBox: Failed to send DM message to {dmTab.Player}: {ex.Message}");
-                    Plugin.Log.Error($"SendChatBox: Stack trace: {ex.StackTrace}");
+                    Plugin.Log.Error($"Failed to send DM message to {dmTab.Player}: {ex.Message}");
                     DisplayErrorMessageInTab(dmTab, $"Failed to send message: {GetUserFriendlyErrorMessage(ex)}");
                 }
                 
@@ -1032,8 +1922,6 @@ public sealed class ChatLogWindow : Window
             {
                 try
                 {
-                    Plugin.Log.Debug($"SendChatBox: Detected /tell command from main chat: '{trimmed}'");
-                    
                     // Parse: /tell PlayerName@World message or /tell PlayerName message
                     // Handle player names with spaces by looking for @ symbol or using a more sophisticated approach
                     var tellContent = trimmed.Substring(6); // Remove "/tell "
@@ -1078,50 +1966,29 @@ public sealed class ChatLogWindow : Window
                         }
                     }
                     
-                    Plugin.Log.Debug($"SendChatBox: Parsed tell - target: '{targetName}', message: '{message}'");
-                    
                     // Try to parse the player name and create a DMPlayer
                     var targetPlayer = ParsePlayerNameWithWorld(targetName);
                     if (targetPlayer != null)
                     {
-                        Plugin.Log.Debug($"SendChatBox: Successfully parsed target player: {targetPlayer.DisplayName}");
-                        
                         // Check if we already have a DM tab for this player using DMManager
                         var dmManager = DMManager.Instance;
                         if (!dmManager.HasOpenDMTab(targetPlayer))
                         {
-                            Plugin.Log.Debug($"SendChatBox: No existing DM tab found, creating new tab for {targetPlayer.DisplayName}");
-                            
                             // Use DMManager to properly create and register the DM tab
                             var newDMTab = dmManager.OpenDMTab(targetPlayer);
                             if (newDMTab != null)
                             {
-                                Plugin.Log.Info($"SendChatBox: Auto-created DM tab for {targetPlayer.DisplayName}");
+                                Plugin.Log.Info($"Auto-created DM tab for {targetPlayer.DisplayName}");
                             }
-                            else
-                            {
-                                Plugin.Log.Error($"SendChatBox: Failed to create DM tab for {targetPlayer.DisplayName}");
-                            }
-                        }
-                        else
-                        {
-                            Plugin.Log.Debug($"SendChatBox: DM tab already exists for {targetPlayer.DisplayName}");
                         }
                         
                         // Track this outgoing tell for error message routing
-                        Plugin.Log.Debug($"SendChatBox: Tracking outgoing tell to {targetPlayer.DisplayName}");
                         Plugin.DMMessageRouter.TrackOutgoingTell(targetPlayer);
-                        Plugin.Log.Debug($"SendChatBox: Outgoing tell tracked successfully");
-                    }
-                    else
-                    {
-                        Plugin.Log.Warning($"SendChatBox: Could not parse target player from '{targetName}'");
                     }
                 }
                 catch (Exception ex)
                 {
-                    Plugin.Log.Error($"SendChatBox: Failed to process /tell command for auto-tab creation: {ex.Message}");
-                    Plugin.Log.Error($"SendChatBox: Stack trace: {ex.StackTrace}");
+                    Plugin.Log.Error($"Failed to process /tell command for auto-tab creation: {ex.Message}");
                 }
                 
                 // Continue with normal tell processing - don't return here
@@ -1272,8 +2139,6 @@ public sealed class ChatLogWindow : Window
     {
         try
         {
-            Plugin.Log.Debug($"ParsePlayerNameWithWorld: Parsing '{playerNameWithWorld}'");
-            
             if (playerNameWithWorld.Contains('@'))
             {
                 var parts = playerNameWithWorld.Split('@');
@@ -1281,8 +2146,6 @@ public sealed class ChatLogWindow : Window
                 {
                     var playerName = parts[0];
                     var worldName = parts[1];
-                    
-                    Plugin.Log.Debug($"ParsePlayerNameWithWorld: Player='{playerName}', World='{worldName}'");
                     
                     // Try to find the world ID from the world name
                     var worldSheet = Sheets.WorldSheet;
@@ -1293,12 +2156,7 @@ public sealed class ChatLogWindow : Window
                         
                         if (world.RowId != 0)
                         {
-                            Plugin.Log.Debug($"ParsePlayerNameWithWorld: Found world ID {world.RowId} for '{worldName}'");
                             return new DMPlayer(playerName, world.RowId);
-                        }
-                        else
-                        {
-                            Plugin.Log.Warning($"ParsePlayerNameWithWorld: Could not find world ID for '{worldName}'");
                         }
                     }
                 }
@@ -1309,12 +2167,7 @@ public sealed class ChatLogWindow : Window
                 var currentWorld = Plugin.ClientState.LocalPlayer?.HomeWorld.RowId ?? 0;
                 if (currentWorld != 0)
                 {
-                    Plugin.Log.Debug($"ParsePlayerNameWithWorld: Using current world {currentWorld} for '{playerNameWithWorld}'");
                     return new DMPlayer(playerNameWithWorld, currentWorld);
-                }
-                else
-                {
-                    Plugin.Log.Warning($"ParsePlayerNameWithWorld: Could not determine current world for '{playerNameWithWorld}'");
                 }
             }
 
@@ -1322,7 +2175,7 @@ public sealed class ChatLogWindow : Window
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"ParsePlayerNameWithWorld: Failed to parse player name '{playerNameWithWorld}': {ex.Message}");
+            Plugin.Log.Error($"Failed to parse player name '{playerNameWithWorld}': {ex.Message}");
             return null;
         }
     }
