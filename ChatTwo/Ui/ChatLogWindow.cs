@@ -601,9 +601,15 @@ public sealed class ChatLogWindow : Window
         // Get the active DM tab (if any)
         var activeDMTab = GetActiveDMTab();
         
-        // Calculate DM pane height based on regular chat height
+        // Store the original available height when no DM pane is shown
         var totalAvailableHeight = ImGui.GetContentRegionAvail().Y;
-        var dmPaneHeight = totalAvailableHeight * 0.5f; // Use 50% of available height, same as regular chat
+        
+        // Calculate DM pane height: make it responsive to window resizing
+        // When window is resized, DM pane should scale proportionally
+        var currentWindowHeight = ImGui.GetWindowSize().Y;
+        var dmPaneHeight = _hasStoredOriginalWindow ? 
+            (currentWindowHeight * 0.4f) : // Use 40% of current window height when expanded
+            (totalAvailableHeight * 0.5f); // Use 50% when initially calculating
         
         var shouldShowDMPane = activeDMTab != null && !_dmPaneCollapsed;
         
@@ -622,11 +628,14 @@ public sealed class ChatLogWindow : Window
             DrawDMPane(activeDMTab, animatedDMPaneHeight);
         }
         
-        // Calculate remaining height for regular chat (after DM pane)
-        var remainingHeight = ImGui.GetContentRegionAvail().Y;
+        // Ensure regular chat area gets consistent height regardless of DM pane state
+        // When DM pane is shown, the window is expanded, so regular chat should get the original height
+        var regularChatHeight = _hasStoredOriginalWindow ? 
+            (_originalWindowSize.Y - ImGui.GetCursorPosY()) : // Use original window's remaining space
+            ImGui.GetContentRegionAvail().Y; // Use current available space when no expansion
         
-        // Draw regular chat area with the remaining space
-        DrawRegularChatArea(remainingHeight);
+        // Draw regular chat area with consistent height
+        DrawRegularChatArea(regularChatHeight);
     }
 
     // Track window expansion state
@@ -634,30 +643,55 @@ public sealed class ChatLogWindow : Window
     private Vector2 _originalWindowPos = Vector2.Zero;
     private bool _hasStoredOriginalWindow = false;
     private float _lastDMPaneHeight = 0f;
+    private float _lastAnimationProgress = -1f; // Track animation progress changes
+    private bool _userIsDragging = false; // Track if user is dragging the window
 
     private void HandleWindowExpansion(bool shouldShowDMPane, float animatedHeight)
     {
+        // Check if user is dragging the window
+        _userIsDragging = ImGui.IsWindowFocused() && ImGui.IsMouseDragging(ImGuiMouseButton.Left) && 
+                         ImGui.IsMouseHoveringRect(ImGui.GetWindowPos(), 
+                         ImGui.GetWindowPos() + new Vector2(ImGui.GetWindowSize().X, 30)); // Title bar area
+        
         // Expand window upward when showing DM pane
         if (shouldShowDMPane && !_hasStoredOriginalWindow && animatedHeight > 10.0f)
         {
             _originalWindowSize = ImGui.GetWindowSize();
             _originalWindowPos = ImGui.GetWindowPos();
             _hasStoredOriginalWindow = true;
+            _lastAnimationProgress = _dmPaneAnimationProgress;
         }
         
-        // Continuously adjust window size during animation (both opening and closing)
-        if (_hasStoredOriginalWindow)
+        // Only adjust window size when animation progress changes AND user is not dragging
+        if (_hasStoredOriginalWindow && !_userIsDragging && 
+            Math.Abs(_dmPaneAnimationProgress - _lastAnimationProgress) > 0.01f)
         {
-            var fullDMPaneHeight = _originalWindowSize.Y * 0.5f; // 50% of original height
-            var currentExpansion = fullDMPaneHeight * _dmPaneAnimationProgress;
+            // Use current window size for more responsive behavior
+            var currentWindowSize = ImGui.GetWindowSize();
+            var baseDMPaneHeight = currentWindowSize.Y * 0.4f; // 40% of current window height
+            var currentExpansion = baseDMPaneHeight * _dmPaneAnimationProgress;
             
-            // Calculate new window size and position
+            // Calculate new window size and position based on current size
             var newHeight = _originalWindowSize.Y + currentExpansion;
             var newY = _originalWindowPos.Y - currentExpansion;
             
-            // Apply the changes smoothly during both opening and closing
+            // Apply the changes only when animation progress changes
             ImGui.SetWindowPos(new Vector2(_originalWindowPos.X, newY));
-            ImGui.SetWindowSize(new Vector2(_originalWindowSize.X, newHeight));
+            ImGui.SetWindowSize(new Vector2(currentWindowSize.X, newHeight)); // Preserve width changes
+            
+            _lastAnimationProgress = _dmPaneAnimationProgress;
+        }
+        
+        // Update original position if user dragged the window
+        if (_userIsDragging && _hasStoredOriginalWindow)
+        {
+            var currentPos = ImGui.GetWindowPos();
+            var currentWindowSize = ImGui.GetWindowSize();
+            var baseDMPaneHeight = currentWindowSize.Y * 0.4f; // Use current window size
+            var currentExpansion = baseDMPaneHeight * _dmPaneAnimationProgress;
+            
+            // Update the original position based on current position and expansion
+            _originalWindowPos = new Vector2(currentPos.X, currentPos.Y + currentExpansion);
         }
         
         // Reset to original only when animation is completely finished AND pane is hidden
@@ -666,6 +700,7 @@ public sealed class ChatLogWindow : Window
             ImGui.SetWindowPos(_originalWindowPos);
             ImGui.SetWindowSize(_originalWindowSize);
             _hasStoredOriginalWindow = false;
+            _lastAnimationProgress = -1f; // Reset animation progress tracking
         }
         
         _lastDMPaneHeight = animatedHeight;
