@@ -174,5 +174,35 @@ internal sealed class DirectMessages(Configuration mutable) : ISettingsTab
         Mutable.DMTabSuffix = dmTabSuffix;
         ImGuiUtil.HelpText("Text to append to DM tab names to distinguish them from regular tabs (e.g., ' (DM)').");
         ImGui.Spacing();
+
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        // Message History Settings
+        ImGui.TextUnformatted("Message History");
+        ImGui.Spacing();
+
+        var loadDMMessageHistory = Mutable.LoadDMMessageHistory;
+        ImGui.Checkbox("Load previous DM messages", ref loadDMMessageHistory);
+        Mutable.LoadDMMessageHistory = loadDMMessageHistory;
+        ImGuiUtil.HelpText("Load previous conversation history when opening a DM tab or window. Messages are loaded from the database.");
+        ImGui.Spacing();
+
+        if (loadDMMessageHistory)
+        {
+            ImGui.Indent();
+            var historyCount = Mutable.DMMessageHistoryCount;
+            ImGui.SliderInt("Messages to load", ref historyCount, 1, 200);
+            Mutable.DMMessageHistoryCount = historyCount;
+            ImGuiUtil.HelpText($"Number of previous messages to load from history. Current: {historyCount} messages.");
+            ImGui.Unindent();
+            ImGui.Spacing();
+        }
+
+        var saveDMMessages = Mutable.SaveDMMessages;
+        ImGui.Checkbox("Save DM messages to database", ref saveDMMessages);
+        Mutable.SaveDMMessages = saveDMMessages;
+        ImGuiUtil.HelpText("Save tell messages to the database for persistent history. Uses the same database as regular chat messages.");
+        ImGui.Spacing();
     }
 }

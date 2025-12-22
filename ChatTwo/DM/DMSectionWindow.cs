@@ -79,10 +79,7 @@ public sealed class DMSectionWindow : Window
         // Only show when DM section is popped out and there are DM tabs
         var shouldShow = Plugin.Config.DMSectionPoppedOut && HasDMTabs();
         
-        if (Plugin.Config.DMSectionPoppedOut || HasDMTabs())
-        {
-            Plugin.Log.Debug($"DMSectionWindow DrawConditions: DMSectionPoppedOut={Plugin.Config.DMSectionPoppedOut}, HasDMTabs={HasDMTabs()}, ShouldShow={shouldShow}");
-        }
+        Plugin.Log.Debug($"DMSectionWindow DrawConditions: DMSectionPoppedOut={Plugin.Config.DMSectionPoppedOut}, HasDMTabs={HasDMTabs()}, ShouldShow={shouldShow}");
         
         return shouldShow;
     }
@@ -608,7 +605,10 @@ public sealed class DMSectionWindow : Window
                 Plugin.Log.Debug($"HasDMTabs: DM tab for {dmTab.Player.DisplayName}, PopOut={tab.PopOut}");
             }
         }
-        return dmTabs.Any();
+        
+        var result = dmTabs.Any();
+        Plugin.Log.Debug($"HasDMTabs: Returning {result}");
+        return result;
     }
     
     /// <summary>

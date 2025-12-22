@@ -41,8 +41,8 @@ internal class DMTab : Tab
             History = new DMMessageHistory(player);
         }
         
-        // Set the tab name to just the player name
-        Name = player.TabName;
+        // Set the tab name to include world information for clarity
+        Name = player.DisplayName; // This includes world: "PlayerName@WorldName"
         
         // DM tabs should not pop out by default
         PopOut = false;
@@ -76,6 +76,7 @@ internal class DMTab : Tab
             if (unreadCount > 0)
             {
                 // Use modern unread indicator format if ModernUI is enabled
+                // Access the static Plugin.Config directly since it's available
                 if (Plugin.Config.ModernUIEnabled)
                     return $"{baseName} •{unreadCount}";
                 else
@@ -129,7 +130,10 @@ internal class DMTab : Tab
             if (unread && isIncoming)
             {
                 Unread += 1;
-                if (message.Matches(Plugin.Config.InactivityHideChannels!, Plugin.Config.InactivityHideExtraChatAll, Plugin.Config.InactivityHideExtraChatChannels))
+                // Access the static Plugin.Config directly since it's available
+                if (message.Matches(Plugin.Config.InactivityHideChannels!, 
+                                  Plugin.Config.InactivityHideExtraChatAll, 
+                                  Plugin.Config.InactivityHideExtraChatChannels))
                     LastActivity = Environment.TickCount64;
             }
         }
@@ -137,7 +141,10 @@ internal class DMTab : Tab
         {
             // For non-DM messages (shouldn't happen in DM tabs, but just in case)
             Unread += 1;
-            if (message.Matches(Plugin.Config.InactivityHideChannels!, Plugin.Config.InactivityHideExtraChatAll, Plugin.Config.InactivityHideExtraChatChannels))
+            // Access the static Plugin.Config directly since it's available
+            if (message.Matches(Plugin.Config.InactivityHideChannels!, 
+                              Plugin.Config.InactivityHideExtraChatAll, 
+                              Plugin.Config.InactivityHideExtraChatChannels))
                 LastActivity = Environment.TickCount64;
         }
     }
@@ -221,6 +228,21 @@ internal class DMTab : Tab
     {
         try
         {
+            // Get the Plugin instance through DMManager
+            var dmManager = DMManager.Instance;
+            if (dmManager.PluginInstance == null)
+            {
+                Plugin.Log.Warning($"LoadMessageHistoryFromStore: DMManager not initialized with Plugin instance, cannot load history for {Player.Name}");
+                return;
+            }
+
+            // Check if message history loading is enabled
+            if (!Plugin.Config.LoadDMMessageHistory)
+            {
+                Plugin.Log.Debug($"Message history loading disabled for {Player.DisplayName}");
+                return;
+            }
+            
             // Check if we already have messages to avoid duplication
             var currentCount = 0;
             try
@@ -235,22 +257,19 @@ internal class DMTab : Tab
             
             if (currentCount > 0)
             {
+                Plugin.Log.Debug($"DMTab already has {currentCount} messages, skipping history load for {Player.DisplayName}");
                 return; // Already have messages, skip history load
             }
-            
-            // Get the Plugin instance through DMManager
-            var dmManager = DMManager.Instance;
-            if (dmManager.PluginInstance == null)
-            {
-                Plugin.Log.Warning($"LoadMessageHistoryFromStore: DMManager not initialized with Plugin instance, cannot load history for {Player.Name}");
-                return;
-            }
+
+            var historyCount = Math.Max(1, Math.Min(200, Plugin.Config.DMMessageHistoryCount));
+            Plugin.Log.Debug($"Loading {historyCount} messages from history for {Player.DisplayName}");
             
             // Load messages from the persistent MessageStore database
             var loadedMessages = new List<Message>();
             
-            // Query the MessageStore for tell messages
-            using (var messageEnumerator = dmManager.PluginInstance.MessageManager.Store.GetMostRecentMessages(count: 1000))
+            // Query the MessageStore for tell messages with a reasonable search limit
+            var searchLimit = Math.Max(1000, historyCount * 10); // Search more messages to find enough relevant ones
+            using (var messageEnumerator = dmManager.PluginInstance.MessageManager.Store.GetMostRecentMessages(count: searchLimit))
             {
                 foreach (var message in messageEnumerator)
                 {
@@ -259,22 +278,24 @@ internal class DMTab : Tab
                     {
                         loadedMessages.Add(message);
                         
-                        // Stop after finding enough messages to avoid performance issues
-                        if (loadedMessages.Count >= 100)
+                        // Stop after finding enough messages
+                        if (loadedMessages.Count >= historyCount)
                             break;
                     }
                 }
             }
             
-            // Take the most recent 50 messages
+            // Take the most recent messages as configured
             var recentMessages = loadedMessages
                 .OrderByDescending(m => m.Date)
-                .Take(50)
+                .Take(historyCount)
                 .OrderBy(m => m.Date)
                 .ToArray();
             
             if (recentMessages.Length > 0)
             {
+                Plugin.Log.Info($"Loaded {recentMessages.Length} message(s) from history for {Player.DisplayName}");
+                
                 foreach (var message in recentMessages)
                 {
                     // Convert old outgoing messages to "You:" format for consistency
@@ -284,12 +305,10 @@ internal class DMTab : Tab
                     // Also add to in-memory history for consistency
                     History.AddMessage(processedMessage, isIncoming: processedMessage.IsFromPlayer(Player));
                 }
-                
-                Plugin.Log.Info($"Loaded {recentMessages.Length} messages for DM tab with {Player.DisplayName}");
             }
             else
             {
-                Plugin.Log.Info($"No message history found for DM tab with {Player.DisplayName}");
+                Plugin.Log.Debug($"No message history found for DM tab with {Player.DisplayName}");
             }
         }
         catch (Exception ex)

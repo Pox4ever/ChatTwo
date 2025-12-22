@@ -1461,6 +1461,34 @@ internal class DMManager
     }
 
     /// <summary>
+    /// Registers a converted DMTab with the manager for proper tracking.
+    /// This is used when converting deserialized regular tabs back to DMTabs.
+    /// </summary>
+    /// <param name="dmTab">The DMTab to register</param>
+    public void RegisterConvertedDMTab(DMTab dmTab)
+    {
+        if (dmTab?.Player == null)
+            return;
+
+        try
+        {
+            Plugin.Log.Debug($"RegisterConvertedDMTab: Registering {dmTab.Player.DisplayName}");
+            
+            // Add to open tabs tracking
+            _openTabs.TryAdd(dmTab.Player, dmTab);
+            
+            // Ensure history exists
+            GetOrCreateHistory(dmTab.Player);
+            
+            Plugin.Log.Debug($"RegisterConvertedDMTab: Successfully registered {dmTab.Player.DisplayName}");
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"RegisterConvertedDMTab: Failed to register {dmTab.Player.DisplayName}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
     /// Creates a DM tab for a player from their name and world ID.
     /// This is a convenience method for UI integration.
     /// </summary>

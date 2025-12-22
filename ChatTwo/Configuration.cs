@@ -193,6 +193,11 @@ internal class Configuration : IPluginConfiguration
     public bool ShowDMTabIcons { get; set; } = true;
     public bool ShowUnreadIndicators { get; set; } = true;
     public string DMTabSuffix { get; set; } = " (DM)"; // For name conflicts
+    
+    // DM Message History Settings
+    public bool LoadDMMessageHistory { get; set; } = true; // Whether to load previous DM messages when opening a DM tab/window
+    public int DMMessageHistoryCount { get; set; } = 50; // Number of previous messages to load (1-200)
+    public bool SaveDMMessages { get; set; } = true; // Whether to save DM messages to database (uses existing DatabaseBattleMessages logic)
 
     internal void UpdateFrom(Configuration other, bool backToOriginal)
     {
@@ -324,6 +329,9 @@ internal class Configuration : IPluginConfiguration
         ShowDMTabIcons = other.ShowDMTabIcons;
         ShowUnreadIndicators = other.ShowUnreadIndicators;
         DMTabSuffix = other.DMTabSuffix;
+        LoadDMMessageHistory = other.LoadDMMessageHistory;
+        DMMessageHistoryCount = other.DMMessageHistoryCount;
+        SaveDMMessages = other.SaveDMMessages;
     }
 }
 

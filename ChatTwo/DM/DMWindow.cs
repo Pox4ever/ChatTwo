@@ -133,6 +133,13 @@ internal class DMWindow : Window
     {
         try
         {
+            // Check if message history loading is enabled
+            if (!Plugin.Config.LoadDMMessageHistory)
+            {
+                Plugin.Log.Debug($"Message history loading disabled for {Player.DisplayName}");
+                return;
+            }
+
             // First check if we already have messages to avoid unnecessary work
             var currentCount = 0;
             try
@@ -147,15 +154,19 @@ internal class DMWindow : Window
             
             if (currentCount > 0)
             {
-                Plugin.Log.Debug($"DMWindow: Skipping history load - already have {currentCount} messages");
+                Plugin.Log.Debug($"DMWindow: Skipping history load - already have {currentCount} messages for {Player.DisplayName}");
                 return; // Already have messages, skip history load to avoid duplication
             }
+
+            var historyCount = Math.Max(1, Math.Min(200, Plugin.Config.DMMessageHistoryCount));
+            Plugin.Log.Debug($"Loading {historyCount} messages from history for {Player.DisplayName}");
             
             // Load messages from the persistent MessageStore database
             var loadedMessages = new List<Message>();
             
-            // Query the MessageStore for tell messages
-            using (var messageEnumerator = ChatLogWindow.Plugin.MessageManager.Store.GetMostRecentMessages(count: 1000))
+            // Query the MessageStore for tell messages with a reasonable search limit
+            var searchLimit = Math.Max(1000, historyCount * 10); // Search more messages to find enough relevant ones
+            using (var messageEnumerator = ChatLogWindow.Plugin.MessageManager.Store.GetMostRecentMessages(count: searchLimit))
             {
                 foreach (var message in messageEnumerator)
                 {
@@ -164,22 +175,24 @@ internal class DMWindow : Window
                     {
                         loadedMessages.Add(message);
                         
-                        // Stop after finding enough messages to avoid performance issues
-                        if (loadedMessages.Count >= 100)
+                        // Stop after finding enough messages
+                        if (loadedMessages.Count >= historyCount)
                             break;
                     }
                 }
             }
             
-            // Take the most recent 50 messages
+            // Take the most recent messages as configured
             var recentMessages = loadedMessages
                 .OrderByDescending(m => m.Date)
-                .Take(50)
+                .Take(historyCount)
                 .OrderBy(m => m.Date)
                 .ToArray();
             
             if (recentMessages.Length > 0)
             {
+                Plugin.Log.Info($"Loaded {recentMessages.Length} message(s) from history for {Player.DisplayName}");
+                
                 foreach (var message in recentMessages)
                 {
                     // Convert old outgoing messages to "You:" format for consistency
@@ -189,12 +202,10 @@ internal class DMWindow : Window
                     // Also add to in-memory history for consistency
                     History.AddMessage(processedMessage, isIncoming: processedMessage.IsFromPlayer(Player));
                 }
-                
-                Plugin.Log.Info($"Loaded {recentMessages.Length} messages for DM with {Player.DisplayName}");
             }
             else
             {
-                Plugin.Log.Info($"No message history found for DM with {Player.DisplayName}");
+                Plugin.Log.Debug($"No message history found for DM with {Player.DisplayName}");
             }
         }
         catch (Exception ex)
