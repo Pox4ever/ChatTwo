@@ -262,20 +262,20 @@ public static class ModernUI
         }
     }
     
-    internal static (ImRaii.Style, ImRaii.Color) PushEnhancedInputStyle(Configuration config, bool isFocused, bool hasError = false)
+    internal static (ImRaii.Style, ImRaii.Color) PushEnhancedInputStyle(Configuration config, bool isFocused, bool hasError = false, float uiAlpha = 1.0f)
     {
         if (!config.ModernUIEnabled || !config.EnhancedInputFeedback)
             return (PushModernInputStyle(config), new ImRaii.Color());
             
         var borderColor = hasError 
-            ? new Vector4(0.8f, 0.2f, 0.2f, 1.0f)  // Red for errors
+            ? new Vector4(0.8f, 0.2f, 0.2f, uiAlpha)  // Red for errors with transparency
             : isFocused 
-                ? new Vector4(0.2f, 0.6f, 1.0f, 1.0f)  // Blue when focused
-                : new Vector4(0.3f, 0.3f, 0.3f, 0.8f);  // Gray when not focused
+                ? new Vector4(0.2f, 0.6f, 1.0f, uiAlpha)  // Blue when focused with transparency
+                : new Vector4(0.3f, 0.3f, 0.3f, 0.8f * uiAlpha);  // Gray when not focused with transparency
                 
         var bgColor = isFocused 
-            ? new Vector4(0.15f, 0.15f, 0.20f, 1.0f)  // Slightly lighter when focused
-            : new Vector4(0.12f, 0.12f, 0.15f, 1.0f);  // Normal background
+            ? new Vector4(0.15f, 0.15f, 0.20f, uiAlpha)  // Slightly lighter when focused with transparency
+            : new Vector4(0.12f, 0.12f, 0.15f, uiAlpha);  // Normal background with transparency
             
         var styleScope = ImRaii.PushStyle(ImGuiStyleVar.FrameRounding, config.UIRounding + (isFocused ? 1.0f : 0.0f))
             .Push(ImGuiStyleVar.FrameBorderSize, config.UIBorderSize + (isFocused ? 0.5f : 0.0f))

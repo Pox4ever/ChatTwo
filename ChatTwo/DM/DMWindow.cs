@@ -48,6 +48,9 @@ internal class DMWindow : Window
     private bool _cachedIsFriend = false;
     private long _lastFriendCheck = 0;
     private const long FriendCheckInterval = 5000; // Check every 5 seconds
+    
+    // UI transparency state
+    private float _currentUIAlpha = 1.0f;
 
     // Animation state
     private readonly Dictionary<int, float> _messageAnimations = new();
@@ -392,19 +395,12 @@ internal class DMWindow : Window
         // Calculate base alpha from settings
         var alpha = DMTab.IndependentOpacity ? DMTab.Opacity : Plugin.Config.WindowAlpha;
         
-        // Apply unfocused transparency if ModernUI is enabled
-        if (Plugin.Config.ModernUIEnabled)
+        // Apply unfocused transparency for all windows
+        // Use cached focus state that gets updated in Draw()
+        if (!_isWindowFocused)
         {
-            // Use cached focus state that gets updated in Draw()
-            if (!_isWindowFocused)
-            {
-                var transparencyFactor = Plugin.Config.UnfocusedTransparency / 100f;
-                _cachedBgAlpha = (alpha / 100f) * transparencyFactor;
-            }
-            else
-            {
-                _cachedBgAlpha = alpha / 100f;
-            }
+            var transparencyFactor = Plugin.Config.UnfocusedTransparency / 100f;
+            _cachedBgAlpha = (alpha / 100f) * transparencyFactor;
         }
         else
         {
@@ -413,11 +409,38 @@ internal class DMWindow : Window
         
         // Apply window entrance animation to background alpha
         BgAlpha = _cachedBgAlpha * _windowFadeAlpha;
+        
+        // Temporary debug logging (commented out to reduce log spam)
+        // if ((Environment.TickCount64 % 1000) < 16) // Log every second
+        // {
+        //     var windowAlpha = DMTab.IndependentOpacity ? DMTab.Opacity : Plugin.Config.WindowAlpha;
+        //     Plugin.Log.Info($"DMWindow '{Player.Name}' PreDraw: Focused={_isWindowFocused}, WindowAlpha={windowAlpha}%, UnfocusedTransparency={Plugin.Config.UnfocusedTransparency}%, Final BgAlpha={BgAlpha:F3}");
+        // }
     }
 
     public override void Draw()
     {
         using var id = ImRaii.PushId($"dm-window-{Player.GetHashCode()}");
+
+        // Update focus state for transparency and mark as read when focused
+        _isWindowFocused = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
+        
+        // Apply transparency to UI elements based on focus state
+        var uiAlpha = _isWindowFocused ? 1.0f : (Plugin.Config.UnfocusedTransparency / 100f);
+        _currentUIAlpha = uiAlpha; // Store for use in nested methods
+        
+        // Push style colors for UI elements with transparency
+        using var textColor = ImRaii.PushColor(ImGuiCol.Text, ImGui.GetColorU32(ImGuiCol.Text) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+        using var buttonColor = ImRaii.PushColor(ImGuiCol.Button, ImGui.GetColorU32(ImGuiCol.Button) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+        using var buttonHoveredColor = ImRaii.PushColor(ImGuiCol.ButtonHovered, ImGui.GetColorU32(ImGuiCol.ButtonHovered) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+        using var buttonActiveColor = ImRaii.PushColor(ImGuiCol.ButtonActive, ImGui.GetColorU32(ImGuiCol.ButtonActive) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+        using var frameColor = ImRaii.PushColor(ImGuiCol.FrameBg, ImGui.GetColorU32(ImGuiCol.FrameBg) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+        using var frameHoveredColor = ImRaii.PushColor(ImGuiCol.FrameBgHovered, ImGui.GetColorU32(ImGuiCol.FrameBgHovered) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+        using var frameActiveColor = ImRaii.PushColor(ImGuiCol.FrameBgActive, ImGui.GetColorU32(ImGuiCol.FrameBgActive) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+        using var tabColor = ImRaii.PushColor(ImGuiCol.Tab, ImGui.GetColorU32(ImGuiCol.Tab) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+        using var tabHoveredColor = ImRaii.PushColor(ImGuiCol.TabHovered, ImGui.GetColorU32(ImGuiCol.TabHovered) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+        using var tabActiveColor = ImRaii.PushColor(ImGuiCol.TabActive, ImGui.GetColorU32(ImGuiCol.TabActive) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+        using var separatorColor = ImRaii.PushColor(ImGuiCol.Separator, ImGui.GetColorU32(ImGuiCol.Separator) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
 
         // Calculate space for input area (including typing indicator space)
         var inputHeight = ImGui.GetFrameHeight() + ImGui.GetStyle().ItemSpacing.Y * 2 + 16; // Extra space for typing indicator
@@ -451,16 +474,13 @@ internal class DMWindow : Window
 
         // Draw DM-specific input area
         DrawDMInputArea();
-
-        // Mark as read when window is focused - only check every few frames to reduce overhead
-        // Also update focus state for transparency
-        if ((FrameTime % 100) == 0)
+        
+        if (_isWindowFocused)
         {
-            _isWindowFocused = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
-            
-            if (_isWindowFocused)
+            LastActivityTime = FrameTime;
+            // Only mark as read every few frames to reduce overhead
+            if ((FrameTime % 100) == 0)
             {
-                LastActivityTime = FrameTime;
                 History.MarkAsRead();
                 DMTab.MarkAsRead();
             }
@@ -1143,7 +1163,7 @@ internal class DMWindow : Window
             
             if (Plugin.Config.ModernUIEnabled)
             {
-                var (styleScope, colorScope) = ModernUI.PushEnhancedInputStyle(Plugin.Config, DMInputFocused, hasError);
+                var (styleScope, colorScope) = ModernUI.PushEnhancedInputStyle(Plugin.Config, DMInputFocused, hasError, _currentUIAlpha);
                 using (styleScope)
                 using (colorScope)
                 {

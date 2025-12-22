@@ -147,6 +147,9 @@ internal class Configuration : IPluginConfiguration
     public bool ShowInlineEmotePreviews = true;
     public bool EnableEmotePickerPopup = true;
     public bool EmotePickerSearchEnabled = true;
+    
+    // DM Section Pop-out Settings
+    public bool DMSectionPoppedOut = false; // Whether the DM section is currently popped out
 
     // DM Management Settings
     public bool CloseDMsOnLogout { get; set; } = false;
@@ -291,6 +294,9 @@ internal class Configuration : IPluginConfiguration
         EnableEmotePickerPopup = other.EnableEmotePickerPopup;
         EmotePickerSearchEnabled = other.EmotePickerSearchEnabled;
         
+        // DM Section Pop-out Settings
+        DMSectionPoppedOut = other.DMSectionPoppedOut;
+        
         // DM Management Settings
         CloseDMsOnLogout = other.CloseDMsOnLogout;
         CloseDMsInCombat = other.CloseDMsInCombat;
@@ -320,7 +326,7 @@ internal class Configuration : IPluginConfiguration
 }
 
 [Serializable]
-internal enum UnreadMode
+public enum UnreadMode
 {
     All,
     Unseen,
@@ -347,7 +353,7 @@ internal static class UnreadModeExt
 }
 
 [Serializable]
-internal class Tab
+public class Tab
 {
     public string Name = Language.Tab_DefaultName;
     public Dictionary<ChatType, ChatSource> ChatCodes = new();
@@ -434,7 +440,7 @@ internal class Tab
     /// MessageList provides an ordered list of messages with duplicate ID
     /// tracking, sorting and mutex protection.
     /// </summary>
-    internal class MessageList
+    public class MessageList
     {
         private readonly SemaphoreSlim LockSlim = new(1, 1);
 
@@ -547,7 +553,7 @@ internal class Tab
             return new RLockedMessageList(LockSlim, Messages);
         }
 
-        internal class RLockedMessageList(SemaphoreSlim lockSlim, List<Message> messages) : IReadOnlyList<Message>, IDisposable
+        public class RLockedMessageList(SemaphoreSlim lockSlim, List<Message> messages) : IReadOnlyList<Message>, IDisposable
         {
             private bool _disposed = false;
             
@@ -588,7 +594,7 @@ internal class Tab
     }
 }
 
-internal class UsedChannel
+public class UsedChannel
 {
     internal InputChannel Channel = InputChannel.Invalid;
     internal List<Chunk> Name = [];

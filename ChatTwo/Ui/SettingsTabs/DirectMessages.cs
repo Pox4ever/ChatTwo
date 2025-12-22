@@ -1,3 +1,5 @@
+using System;
+using ChatTwo.DM;
 using ChatTwo.Resources;
 using ChatTwo.Util;
 using Dalamud.Bindings.ImGui;
@@ -8,6 +10,9 @@ internal sealed class DirectMessages(Configuration mutable) : ISettingsTab
 {
     private Configuration Mutable { get; } = mutable;
     public string Name => "Direct Messages###tabs-direct-messages";
+    
+    // Track previous state to detect changes
+    private static bool? _lastDMSectionPoppedOut = null;
 
     public void Draw(bool changed)
     {
@@ -75,6 +80,39 @@ internal sealed class DirectMessages(Configuration mutable) : ISettingsTab
             ImGui.Unindent();
             ImGui.Spacing();
         }
+
+        var dmSectionPoppedOut = Mutable.DMSectionPoppedOut;
+        ImGui.Checkbox("Pop out DM section", ref dmSectionPoppedOut);
+        
+        // Check if the setting changed using static tracking
+        if (_lastDMSectionPoppedOut.HasValue && dmSectionPoppedOut != _lastDMSectionPoppedOut.Value)
+        {
+            Plugin.Log.Info($"DirectMessages: DM section setting changed from {_lastDMSectionPoppedOut.Value} to {dmSectionPoppedOut}");
+            
+            // Update the setting FIRST in both mutable and plugin config
+            Mutable.DMSectionPoppedOut = dmSectionPoppedOut;
+            Plugin.Config.DMSectionPoppedOut = dmSectionPoppedOut;
+            
+            // Then handle the toggle with the new setting value
+            try
+            {
+                DMManager.Instance.OnDMSectionToggled();
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.Error($"Error handling DM section toggle in settings: {ex.Message}");
+            }
+        }
+        else
+        {
+            // No change, just update the setting normally
+            Mutable.DMSectionPoppedOut = dmSectionPoppedOut;
+        }
+        
+        // Update the tracked value for next frame
+        _lastDMSectionPoppedOut = dmSectionPoppedOut;
+        ImGuiUtil.HelpText("Move all DM tabs to a separate window, leaving only regular chat tabs in the main window.");
+        ImGui.Spacing();
 
         ImGui.Separator();
         ImGui.Spacing();

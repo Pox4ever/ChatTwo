@@ -23,6 +23,43 @@ internal sealed class Tabs : ISettingsTab
         Plugin = plugin;
         Mutable = mutable;
     }
+    
+    /// <summary>
+    /// Checks if a tab is likely a DM tab based on its name pattern.
+    /// This is used as a fallback when DM tabs are deserialized as regular Tab objects.
+    /// </summary>
+    private bool IsLikelyDMTab(Tab tab)
+    {
+        // First check if DMManager recognizes this as a DM player name
+        try
+        {
+            if (DMManager.Instance.IsKnownDMPlayer(tab.Name))
+                return true;
+        }
+        catch
+        {
+            // If DMManager isn't ready, fall back to pattern matching
+        }
+        
+        // Pattern-based detection as fallback
+        // Check if the tab has only Tell chat codes (typical for DM tabs)
+        var hasTellCodes = tab.ChatCodes.ContainsKey(ChatType.TellIncoming) || 
+                          tab.ChatCodes.ContainsKey(ChatType.TellOutgoing);
+        
+        // Check if it has very few chat codes (DM tabs typically only have Tell codes)
+        var hasLimitedChatCodes = tab.ChatCodes.Count <= 3; // Tell incoming, outgoing, and maybe one more
+        
+        // Check if the name doesn't match common tab names
+        var commonTabNames = new[] { "General", "Battle", "Event", "Say", "Shout", "Tell", "Party", "Alliance", "FC", "LS", "CWLS", "Novice Network", "Custom" };
+        var isNotCommonTabName = !commonTabNames.Any(common => tab.Name.Contains(common, StringComparison.OrdinalIgnoreCase));
+        
+        // Check if the name looks like a player name (contains letters and possibly spaces, but not special symbols)
+        var looksLikePlayerName = !string.IsNullOrEmpty(tab.Name) && 
+                                 tab.Name.All(c => char.IsLetter(c) || char.IsWhiteSpace(c) || c == '\'' || c == '-') &&
+                                 tab.Name.Any(char.IsLetter);
+        
+        return hasTellCodes && hasLimitedChatCodes && isNotCommonTabName && looksLikePlayerName;
+    }
 
     public void Draw(bool changed)
     {
@@ -53,9 +90,10 @@ internal sealed class Tabs : ISettingsTab
         
         // Filter out DM tabs from settings display - they shouldn't be configurable here
         // DM tabs are temporary conversation tabs managed by the DM system, not permanent user-configured tabs
+        // Also filter out tabs that look like DM tabs but were deserialized as regular Tab objects
         var configurableTabs = Mutable.Tabs
             .Select((tab, index) => new { tab, index })
-            .Where(x => !(x.tab is DMTab))
+            .Where(x => !(x.tab is DMTab) && !IsLikelyDMTab(x.tab))
             .ToList();
         
         for (var i = 0; i < configurableTabs.Count; i++)

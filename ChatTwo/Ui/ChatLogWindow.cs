@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Linq;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -54,6 +55,9 @@ public sealed class ChatLogWindow : Window
     private bool FixCursor;
     private int AutoCompleteSelection;
     private bool AutoCompleteShouldScroll;
+    
+    // UI transparency state
+    private float CurrentUIAlpha = 1.0f;
 
     // Used to detect channel changes for the webinterface
     public Chunk[] PreviousChannel = [];
@@ -459,26 +463,8 @@ public sealed class ChatLogWindow : Window
 
         if (LastViewport == ImGuiHelpers.MainViewport.Handle && !WasDocked)
         {
-            var alpha = Plugin.Config.WindowAlpha / 100f;
-            
-            // Apply unfocused transparency if ModernUI is enabled
-            if (Plugin.Config.ModernUIEnabled)
-            {
-                var isWindowFocused = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
-                if (!isWindowFocused)
-                {
-                    var transparencyFactor = Plugin.Config.UnfocusedTransparency / 100f;
-                    BgAlpha = alpha * transparencyFactor;
-                }
-                else
-                {
-                    BgAlpha = alpha;
-                }
-            }
-            else
-            {
-                BgAlpha = alpha;
-            }
+            // BgAlpha is now set in Draw() method for proper focus-based transparency
+            // Don't set it here as it would override the focus-based transparency
         }
 
         LastViewport = ImGui.GetWindowViewport().Handle;
@@ -542,6 +528,37 @@ public sealed class ChatLogWindow : Window
     {
         DrewThisFrame = true;
         
+        // Update focus state and apply transparency
+        var isWindowFocused = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
+        var alpha = Plugin.Config.WindowAlpha / 100f;
+        
+        if (!isWindowFocused)
+        {
+            var transparencyFactor = Plugin.Config.UnfocusedTransparency / 100f;
+            BgAlpha = alpha * transparencyFactor;
+        }
+        else
+        {
+            BgAlpha = alpha;
+        }
+        
+        // Apply transparency to UI elements based on focus state
+        var uiAlpha = isWindowFocused ? 1.0f : (Plugin.Config.UnfocusedTransparency / 100f);
+        CurrentUIAlpha = uiAlpha; // Store for use in nested methods
+        
+        // Push style colors for UI elements with transparency
+        using var textColor = ImRaii.PushColor(ImGuiCol.Text, ImGui.GetColorU32(ImGuiCol.Text) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+        using var buttonColor = ImRaii.PushColor(ImGuiCol.Button, ImGui.GetColorU32(ImGuiCol.Button) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+        using var buttonHoveredColor = ImRaii.PushColor(ImGuiCol.ButtonHovered, ImGui.GetColorU32(ImGuiCol.ButtonHovered) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+        using var buttonActiveColor = ImRaii.PushColor(ImGuiCol.ButtonActive, ImGui.GetColorU32(ImGuiCol.ButtonActive) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+        using var frameColor = ImRaii.PushColor(ImGuiCol.FrameBg, ImGui.GetColorU32(ImGuiCol.FrameBg) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+        using var frameHoveredColor = ImRaii.PushColor(ImGuiCol.FrameBgHovered, ImGui.GetColorU32(ImGuiCol.FrameBgHovered) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+        using var frameActiveColor = ImRaii.PushColor(ImGuiCol.FrameBgActive, ImGui.GetColorU32(ImGuiCol.FrameBgActive) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+        using var tabColor = ImRaii.PushColor(ImGuiCol.Tab, ImGui.GetColorU32(ImGuiCol.Tab) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+        using var tabHoveredColor = ImRaii.PushColor(ImGuiCol.TabHovered, ImGui.GetColorU32(ImGuiCol.TabHovered) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+        using var tabActiveColor = ImRaii.PushColor(ImGuiCol.TabActive, ImGui.GetColorU32(ImGuiCol.TabActive) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+        using var separatorColor = ImRaii.PushColor(ImGuiCol.Separator, ImGui.GetColorU32(ImGuiCol.Separator) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+        
         try
         {
             DrawChatLog();
@@ -578,772 +595,50 @@ public sealed class ChatLogWindow : Window
         if (IsChatMode && Plugin.InputPreview.IsDrawable)
             Plugin.InputPreview.CalculatePreview();
 
-        // Check if we have any DM tabs at all
-        var hasDMTabs = Plugin.Config.Tabs.Any(tab => !tab.PopOut && tab is DMTab);
-        
-        if (hasDMTabs)
-        {
-            // Use the dual-row tab system with proper context menu support
-            DrawDualRowTabSystem();
-        }
-        else
-        {
-            // Use original single-row tab system when no DM tabs exist
-            DrawSingleRowTabSystem();
-        }
+        // Always use the original single-row tab system
+        // DM tabs are handled via the popped-out DM section window
+        DrawNormalChatPane();
         
         // CRITICAL FIX: Draw popups at parent window level to avoid child window conflicts
         // This ensures popups work correctly even when multiple child windows are present
         PayloadHandler.Draw();
     }
-
-    private void DrawSingleRowTabSystem()
-    {
-        // Original chat drawing system when no DM tabs exist - includes input field
-        DrawNormalChatPane();
-    }
-
-    // Add fields to track DM pane state and animation
-    private bool _dmPaneCollapsed = true; // Start collapsed by default
-    private bool _dmPaneManuallyCollapsed = false; // Track if user manually collapsed the pane
-    private float _dmPaneAnimationProgress = 0f;
-    private bool _dmPaneAnimating = false;
-    private long _dmPaneAnimationStartTime = 0;
-    private const float DM_PANE_ANIMATION_DURATION = 300f; // milliseconds
     
-    // DM input field state
-    private string _dmInputText = string.Empty;
-
-    private void DrawDualRowTabSystem()
+    /// <summary>
+    /// Checks if a tab is likely a DM tab based on its name pattern.
+    /// This is used as a fallback when DM tabs are deserialized as regular Tab objects.
+    /// </summary>
+    private bool IsLikelyDMTab(Tab tab)
     {
-        // First row: DM tabs only (at the very top)
-        DrawDMTabRow();
-        
-        // Get the active DM tab (if any)
-        var activeDMTab = GetActiveDMTab();
-        
-        // Store the original available height when no DM pane is shown
-        var totalAvailableHeight = ImGui.GetContentRegionAvail().Y;
-        
-        // Calculate DM pane height: make it responsive to window resizing
-        // When window is resized, DM pane should scale proportionally
-        var currentWindowHeight = ImGui.GetWindowSize().Y;
-        var dmPaneHeight = _hasStoredOriginalWindow ? 
-            (currentWindowHeight * 0.4f) : // Use 40% of current window height when expanded
-            (totalAvailableHeight * 0.5f); // Use 50% when initially calculating
-        
-        var shouldShowDMPane = activeDMTab != null && !_dmPaneCollapsed;
-        
-        // Handle animation
-        UpdateDMPaneAnimation(shouldShowDMPane);
-        
-        // Get animated height based on progress
-        var animatedDMPaneHeight = dmPaneHeight * _dmPaneAnimationProgress;
-        
-        // Handle window expansion upward (re-enabled with stability improvements)
-        HandleWindowExpansion(shouldShowDMPane, animatedDMPaneHeight);
-        
-        // Draw DM pane if active and not collapsed (only draw if there's meaningful height)
-        if (animatedDMPaneHeight > 1.0f && activeDMTab != null)
-        {
-            DrawDMPane(activeDMTab, animatedDMPaneHeight);
-        }
-        
-        // Ensure regular chat area gets consistent height regardless of DM pane state
-        // When DM pane is shown, the window is expanded, so regular chat should get the original height
-        var regularChatHeight = _hasStoredOriginalWindow ? 
-            (_originalWindowSize.Y - ImGui.GetCursorPosY()) : // Use original window's remaining space
-            ImGui.GetContentRegionAvail().Y; // Use current available space when no expansion
-        
-        // Draw regular chat area with consistent height
-        DrawRegularChatArea(regularChatHeight);
-    }
-
-    // Track window expansion state
-    private Vector2 _originalWindowSize = Vector2.Zero;
-    private Vector2 _originalWindowPos = Vector2.Zero;
-    private bool _hasStoredOriginalWindow = false;
-    private float _lastDMPaneHeight = 0f;
-    private float _lastAnimationProgress = -1f; // Track animation progress changes
-    private bool _userIsDragging = false; // Track if user is dragging the window
-    
-    // DM pane resizing state
-    private float _dmPaneHeightRatio = 0.4f; // Default to 40% of window height
-    private Vector2 _lastWindowSizeForDMPane = Vector2.Zero; // Track window size changes for DM pane scaling
-
-    private void HandleWindowExpansion(bool shouldShowDMPane, float animatedHeight)
-    {
-        // Check if user is dragging the window
-        _userIsDragging = ImGui.IsWindowFocused() && ImGui.IsMouseDragging(ImGuiMouseButton.Left) && 
-                         ImGui.IsMouseHoveringRect(ImGui.GetWindowPos(), 
-                         ImGui.GetWindowPos() + new Vector2(ImGui.GetWindowSize().X, 30)); // Title bar area
-        
-        // Track current window state
-        var currentWindowSize = ImGui.GetWindowSize();
-        var currentWindowPos = ImGui.GetWindowPos();
-        
-        // Expand window upward when showing DM pane
-        if (shouldShowDMPane && !_hasStoredOriginalWindow && animatedHeight > 10.0f)
-        {
-            _originalWindowSize = currentWindowSize;
-            _originalWindowPos = currentWindowPos;
-            _hasStoredOriginalWindow = true;
-            _lastAnimationProgress = _dmPaneAnimationProgress;
-            _lastWindowSizeForDMPane = currentWindowSize;
-            
-            // Initialize the DM pane height ratio based on current calculation
-            var currentWindowHeight = _originalWindowSize.Y;
-            _dmPaneHeightRatio = Math.Max(0.2f, Math.Min(0.7f, animatedHeight / currentWindowHeight));
-        }
-        
-        // Detect if user resized the window while DM pane is open
-        if (_hasStoredOriginalWindow && !_userIsDragging && !_dmPaneAnimating)
-        {
-            // Check if window size changed (user resized)
-            if (_lastWindowSizeForDMPane != currentWindowSize)
-            {
-                // Calculate the difference in size
-                var sizeDelta = currentWindowSize - _lastWindowSizeForDMPane;
-                
-                // Update the stored original size to reflect the user's new preference
-                // The original size should be what the window would be WITHOUT the DM pane
-                var baseDMPaneHeight = _originalWindowSize.Y * _dmPaneHeightRatio;
-                var currentExpansion = baseDMPaneHeight * _dmPaneAnimationProgress;
-                
-                // The new "original" size is the current size minus the current DM expansion
-                _originalWindowSize = new Vector2(currentWindowSize.X, currentWindowSize.Y - currentExpansion);
-                
-                // Update position if the window moved up due to resizing
-                if (sizeDelta.Y != 0)
-                {
-                    // If the window got taller, we need to adjust the original position
-                    _originalWindowPos = new Vector2(currentWindowPos.X, currentWindowPos.Y + currentExpansion);
-                }
-                
-                _lastWindowSizeForDMPane = currentWindowSize;
-                
-                Plugin.Log.Debug($"DM pane: User resized window, updated original size to {_originalWindowSize}, pos to {_originalWindowPos}");
-            }
-        }
-        
-        // Only adjust window size when animation progress changes AND user is not dragging
-        if (_hasStoredOriginalWindow && !_userIsDragging && 
-            Math.Abs(_dmPaneAnimationProgress - _lastAnimationProgress) > 0.01f)
-        {
-            // Use stored ratio for consistent behavior
-            var baseDMPaneHeight = _originalWindowSize.Y * _dmPaneHeightRatio;
-            var currentExpansion = baseDMPaneHeight * _dmPaneAnimationProgress;
-            
-            // Calculate new window size and position based on original state
-            var newHeight = _originalWindowSize.Y + currentExpansion;
-            var newY = _originalWindowPos.Y - currentExpansion;
-            
-            // Apply the changes smoothly
-            ImGui.SetWindowPos(new Vector2(_originalWindowPos.X, newY));
-            ImGui.SetWindowSize(new Vector2(_originalWindowSize.X, newHeight));
-            
-            _lastAnimationProgress = _dmPaneAnimationProgress;
-        }
-        
-        // Update original position if user dragged the window
-        if (_userIsDragging && _hasStoredOriginalWindow)
-        {
-            var baseDMPaneHeight = _originalWindowSize.Y * _dmPaneHeightRatio;
-            var currentExpansion = baseDMPaneHeight * _dmPaneAnimationProgress;
-            
-            // Update the original position based on current position and expansion
-            _originalWindowPos = new Vector2(currentWindowPos.X, currentWindowPos.Y + currentExpansion);
-            
-            Plugin.Log.Debug($"DM pane: User dragged window, updated original pos to {_originalWindowPos}");
-        }
-        
-        // Reset to original only when animation is completely finished AND pane is hidden
-        if (!shouldShowDMPane && _hasStoredOriginalWindow && _dmPaneAnimationProgress <= 0.0f && !_dmPaneAnimating)
-        {
-            ImGui.SetWindowPos(_originalWindowPos);
-            ImGui.SetWindowSize(_originalWindowSize);
-            _hasStoredOriginalWindow = false;
-            _lastAnimationProgress = -1f;
-            
-            Plugin.Log.Debug($"DM pane: Restored to final size {_originalWindowSize}, pos {_originalWindowPos}");
-        }
-        
-        _lastDMPaneHeight = animatedHeight;
-    }
-
-    private void DrawRegularChatArea(float availableHeight)
-    {
-        // Draw regular tabs right above the chat content
-        DrawRegularTabRow();
-        
-        // Get the active regular tab (not DM tab)
-        var activeRegularTab = GetActiveRegularTab();
-        if (activeRegularTab == null)
-            return;
-
-        // Calculate remaining height for message log and input
-        var remainingHeight = ImGui.GetContentRegionAvail().Y;
-        // Minimal reserved space: just enough for channel name + input field
-        var inputHeight = ImGui.GetFrameHeight() * 2 + ImGui.GetStyle().ItemSpacing.Y * 0.5f;
-        var messageHeight = remainingHeight - inputHeight;
-        
-        // Ensure we have minimum space for input
-        if (messageHeight < 50) // Minimum message area height
-        {
-            messageHeight = 50;
-            inputHeight = remainingHeight - messageHeight;
-        }
-        
-        // CRITICAL FIX: Draw message log directly without child window to avoid blocking context menus
-        // The nested child windows were blocking right-click events from reaching the message area
-        DrawMessageLog(activeRegularTab, PayloadHandler, messageHeight, false);
-
-        // Draw channel name with reduced spacing
-        using (ImRaii.PushStyle(ImGuiStyleVar.ItemSpacing, new Vector2(0, 2))) // Minimal vertical spacing
-        {
-            DrawChannelName(activeRegularTab);
-        }
-
-        // Draw channel selector and input for regular chat with reduced spacing
-        using (ImRaii.PushStyle(ImGuiStyleVar.ItemSpacing, new Vector2(ImGui.GetStyle().ItemSpacing.X, 2))) // Keep horizontal spacing, reduce vertical
-        {
-            DrawRegularChatInput(activeRegularTab);
-        }
-    }
-
-    private void UpdateDMPaneAnimation(bool shouldShowDMPane)
-    {
-        var currentTime = Environment.TickCount64;
-        
-        // Start animation if state changed
-        if (shouldShowDMPane != _previousDMPaneVisible)
-        {
-            _dmPaneAnimating = true;
-            _dmPaneAnimationStartTime = currentTime;
-            _previousDMPaneVisible = shouldShowDMPane;
-        }
-        
-        // Update animation progress
-        if (_dmPaneAnimating)
-        {
-            var elapsed = currentTime - _dmPaneAnimationStartTime;
-            var progress = Math.Min(elapsed / DM_PANE_ANIMATION_DURATION, 1.0f);
-            
-            // Use easing function for smooth animation (ease-out)
-            var easedProgress = 1f - (float)Math.Pow(1f - progress, 3f);
-            
-            if (shouldShowDMPane)
-            {
-                _dmPaneAnimationProgress = easedProgress;
-            }
-            else
-            {
-                _dmPaneAnimationProgress = 1f - easedProgress;
-            }
-            
-            // Animation complete - use exact threshold to prevent flicker
-            if (progress >= 1.0f)
-            {
-                _dmPaneAnimating = false;
-                _dmPaneAnimationProgress = shouldShowDMPane ? 1f : 0f;
-            }
-        }
-        else
-        {
-            // No animation, set target state immediately
-            _dmPaneAnimationProgress = shouldShowDMPane ? 1f : 0f;
-        }
-    }
-
-    // Track previous DM pane state for animation
-    private bool _previousDMPaneVisible = false;
-
-    private void DrawDMTabRow()
-    {
-        var dmTabs = Plugin.Config.Tabs
-            .Select((tab, index) => new { tab, index })
-            .Where(x => !x.tab.PopOut && x.tab is DMTab)
-            .ToList();
-
-        if (dmTabs.Count == 0)
-            return;
-
-        using (ModernUI.PushModernTabStyle(Plugin.Config))
-        using (var tabBar = ImRaii.TabBar("##dm-tabs"))
-        {
-            if (!tabBar.Success)
-                return;
-
-            foreach (var dmTabInfo in dmTabs)
-            {
-                var dmTab = (DMTab)dmTabInfo.tab;
-                var tabIndex = dmTabInfo.index;
-                
-                var unread = dmTab.Unread == 0 ? "" : $" •{dmTab.Unread}";
-                // Add visual indicator when pane is expanded
-                var paneIndicator = (Plugin.LastTab == tabIndex && !_dmPaneCollapsed) ? " ▼" : "";
-                var tabLabel = $"💬 {dmTab.Player.Name}{unread}{paneIndicator}";
-                
-                // Check if this is the active DM tab
-                var isActiveDMTab = Plugin.LastTab == tabIndex;
-                var flags = ImGuiTabItemFlags.None;
-                
-                // Add visual styling for active DM tab with expanded pane
-                if (isActiveDMTab && !_dmPaneCollapsed)
-                {
-                    // Add a subtle highlight for the connected tab
-                    using var colorPush = ImRaii.PushColor(ImGuiCol.TabActive, 
-                        ImGui.GetColorU32(ImGuiCol.TabActive) | 0x20000000); // Slight highlight
-                }
-                
-                using var tabItem = ImRaii.TabItem($"{tabLabel}###dm-tab-{tabIndex}", flags);
-                
-                // Only handle click when tab is clicked, not when it's just active
-                var wasClicked = ImGui.IsItemClicked(ImGuiMouseButton.Left);
-                
-                if (tabItem.Success)
-                {
-                    var hasTabSwitched = Plugin.LastTab != tabIndex;
-                    
-                    // Only process click logic when actually clicked, not just when active
-                    if (wasClicked)
-                    {
-                        Plugin.LastTab = tabIndex;
-                        
-                        // Toggle DM pane when clicking the tab (if it's already the active tab)
-                        // Auto-expand when switching to a different DM tab
-                        if (!hasTabSwitched && isActiveDMTab)
-                        {
-                            // Toggle pane visibility when clicking the already active tab
-                            _dmPaneCollapsed = !_dmPaneCollapsed;
-                            _dmPaneManuallyCollapsed = _dmPaneCollapsed;
-                            _dmPaneAnimating = true;
-                            _dmPaneAnimationStartTime = Environment.TickCount64;
-                        }
-                        else if (hasTabSwitched)
-                        {
-                            // Auto-expand when switching to a different DM tab
-                            _dmPaneCollapsed = false;
-                            _dmPaneManuallyCollapsed = false;
-                            _dmPaneAnimating = true;
-                            _dmPaneAnimationStartTime = Environment.TickCount64;
-                        }
-                        
-                        if (hasTabSwitched)
-                        {
-                            var previousTab = Plugin.Config.Tabs.ElementAtOrDefault(Plugin.LastTab);
-                            if (previousTab != null)
-                                TabSwitched(dmTab, previousTab);
-                        }
-                        
-                        // Clear unread for this DM tab
-                        dmTab.Unread = 0;
-                        dmTab.MarkAsRead();
-                    }
-                    else if (Plugin.LastTab != tabIndex)
-                    {
-                        // Ensure the tab is set as active even without click (for programmatic switching)
-                        Plugin.LastTab = tabIndex;
-                    }
-                }
-                
-                // Add tooltip to explain click behavior
-                if (ImGui.IsItemHovered())
-                {
-                    var tooltipText = isActiveDMTab 
-                        ? (_dmPaneCollapsed ? "Click to show conversation" : "Click to hide conversation")
-                        : "Click to switch to this conversation";
-                    ModernUI.DrawModernTooltip(tooltipText, Plugin.Config);
-                }
-                
-                // Add context menu for DM tabs
-                DrawDMTabContextMenu(dmTab, tabIndex);
-            }
-            
-            // DM tabs are clickable to toggle the pane - no separate button needed
-        }
-    }
-
-    private void DrawRegularTabRow()
-    {
-        var regularTabs = Plugin.Config.Tabs
-            .Select((tab, index) => new { tab, index })
-            .Where(x => !x.tab.PopOut && !(x.tab is DMTab))
-            .ToList();
-
-        if (regularTabs.Count == 0)
-            return;
-
-        using (ModernUI.PushModernTabStyle(Plugin.Config))
-        using (var tabBar = ImRaii.TabBar("##regular-tabs"))
-        {
-            if (!tabBar.Success)
-                return;
-
-            foreach (var tabInfo in regularTabs)
-            {
-                var tab = tabInfo.tab;
-                var tabIndex = tabInfo.index;
-                
-                var unread = tab.Unread == 0 ? "" : $" ({tab.Unread})";
-                var tabLabel = tab.Name + unread;
-                
-                if (Plugin.Config.ModernUIEnabled && Plugin.Config.ShowTabIcons)
-                {
-                    var icon = ModernUI.GetTabIcon(tab);
-                    tabLabel = $"{icon.ToIconString()} {tab.Name}{unread}";
-                }
-
-                // Let ImGui handle tab selection naturally - no forced selection
-                using var tabItem = ImRaii.TabItem($"{tabLabel}###regular-tab-{tabIndex}");
-                
-                if (tabItem.Success)
-                {
-                    // This tab is now active - update our tracking
-                    SetActiveRegularTab(tabIndex);
-                    
-                    // Clear unread for this tab
-                    tab.Unread = 0;
-                }
-                
-                // Add context menu for regular tabs
-                DrawTabContextMenu(tab, tabIndex);
-            }
-        }
-    }
-
-    // Track the active regular tab separately from the main Plugin.LastTab
-    private int _activeRegularTabIndex = 0;
-
-    private int GetActiveRegularTabIndex()
-    {
-        // Find the first regular tab if our stored index is invalid
-        var regularTabs = Plugin.Config.Tabs
-            .Select((tab, index) => new { tab, index })
-            .Where(x => !x.tab.PopOut && !(x.tab is DMTab))
-            .ToList();
-
-        if (regularTabs.Count == 0)
-            return -1;
-
-        // Check if our stored index is still valid
-        var storedTab = regularTabs.FirstOrDefault(x => x.index == _activeRegularTabIndex);
-        if (storedTab != null)
-            return _activeRegularTabIndex;
-
-        // Default to first regular tab
-        _activeRegularTabIndex = regularTabs[0].index;
-        return _activeRegularTabIndex;
-    }
-
-    private void SetActiveRegularTab(int tabIndex)
-    {
-        _activeRegularTabIndex = tabIndex;
-    }
-
-    private DMTab? GetActiveDMTab()
-    {
-        if (Plugin.LastTab >= 0 && Plugin.LastTab < Plugin.Config.Tabs.Count)
-        {
-            var activeTab = Plugin.Config.Tabs[Plugin.LastTab];
-            if (activeTab is DMTab dmTab && !activeTab.PopOut)
-                return dmTab;
-        }
-        return null;
-    }
-
-    private void DrawDMPane(DMTab activeDMTab, float height)
-    {
-        // Add fade-in effect based on animation progress
-        var alpha = _dmPaneAnimationProgress;
-        using var alphaScope = ImRaii.PushStyle(ImGuiStyleVar.Alpha, alpha);
-        
-        // Add subtle border to connect with the tab above
-        var borderColor = ImGui.GetColorU32(ImGuiCol.Border);
-        var drawList = ImGui.GetWindowDrawList();
-        var panePos = ImGui.GetCursorScreenPos();
-        var paneSize = new Vector2(ImGui.GetContentRegionAvail().X, height);
-        
-        // Draw connecting line from DM tab to pane (visual connection)
-        if (alpha > 0.1f)
-        {
-            var lineColor = ImGui.GetColorU32(ImGuiCol.TabActive);
-            drawList.AddLine(
-                new Vector2(panePos.X, panePos.Y - 2),
-                new Vector2(panePos.X + paneSize.X, panePos.Y - 2),
-                lineColor,
-                2.0f * alpha
-            );
-        }
-        
-        using (var dmChild = ImRaii.Child("##dm-conversation", new Vector2(-1, height), false, 
-            ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoBackground))
-        {
-            if (dmChild.Success)
-            {
-                // Enhanced header with better visual connection
-                var headerColor = ImGui.GetColorU32(ImGuiCol.TabActive) & 0x00FFFFFF | ((uint)(alpha * 40) << 24);
-                drawList.AddRectFilled(
-                    ImGui.GetCursorScreenPos(),
-                    ImGui.GetCursorScreenPos() + new Vector2(ImGui.GetContentRegionAvail().X, ImGui.GetFrameHeight() + 8),
-                    headerColor
-                );
-                
-                ImGui.Spacing();
-                
-                // DM header with player name and status
-                ImGui.Text($"💬 Direct Message: {activeDMTab.Player.Name}");
-                
-                ImGui.SameLine(ImGui.GetContentRegionAvail().X - 120);
-                
-                // Pop out button with animation
-                using (ModernUI.PushModernButtonStyle(Plugin.Config))
-                {
-                    if (ImGuiUtil.IconButton(FontAwesomeIcon.ExternalLinkAlt, "Pop out to window"))
-                    {
-                        DMManager.Instance.ConvertTabToWindow(activeDMTab.Player);
-                    }
-                }
-
-                ImGui.SameLine();
-
-                // Close DM button with animation
-                using (ModernUI.PushModernButtonStyle(Plugin.Config))
-                {
-                    if (ImGuiUtil.IconButton(FontAwesomeIcon.Times, "Close DM"))
-                    {
-                        // Properly collapse the pane and set manual collapse flag
-                        _dmPaneCollapsed = true;
-                        _dmPaneManuallyCollapsed = true; // Prevent auto-expand from reopening
-                        _dmPaneAnimating = true;
-                        _dmPaneAnimationStartTime = Environment.TickCount64;
-                        
-                        // Switch to first regular tab after a short delay
-                        var firstRegularTab = Plugin.Config.Tabs
-                            .Select((tab, index) => new { tab, index })
-                            .FirstOrDefault(x => !x.tab.PopOut && !(x.tab is DMTab));
-                        
-                        if (firstRegularTab != null)
-                        {
-                            Plugin.WantedTab = firstRegularTab.index;
-                        }
-                    }
-                }
-                
-                ImGui.Spacing();
-                
-                // Animated separator
-                var separatorAlpha = Math.Min(alpha * 2f, 1f);
-                using var sepAlpha = ImRaii.PushStyle(ImGuiStyleVar.Alpha, separatorAlpha);
-                ImGui.Separator();
-
-        // DM message area with smooth scrolling - CRITICAL FIX: Add NoInputs flag to prevent blocking context menus
-        // Use EXACTLY the same spacing calculation as regular chat for consistency
-        var availableHeight = ImGui.GetContentRegionAvail().Y;
-        var inputHeight = ImGui.GetFrameHeight() * 2 + ImGui.GetStyle().ItemSpacing.Y * 0.5f; // Same as regular chat
-        var messageHeight = availableHeight - inputHeight;
-        
-        // Ensure we have minimum space for input (same logic as regular chat)
-        if (messageHeight < 50) // Minimum message area height
-        {
-            messageHeight = 50;
-            inputHeight = availableHeight - messageHeight;
-        }
-        
-        // CRITICAL FIX: Draw message log directly without child window to match regular chat
-        // This eliminates the darker background and ensures consistent spacing
-        DrawMessageLog(activeDMTab, PayloadHandler, messageHeight, false);
-
-                // DM input area with enhanced styling and minimal spacing
-                using (ImRaii.PushStyle(ImGuiStyleVar.ItemSpacing, new Vector2(ImGui.GetStyle().ItemSpacing.X, 2))) // Minimal vertical spacing
-                {
-                    DrawDMInputArea(activeDMTab, alpha);
-                }
-            }
-        }
-    }
-
-    private void DrawDMInputArea(DMTab dmTab, float alpha = 1f)
-    {
+        // First check if DMManager recognizes this as a DM player name
         try
         {
-            var inputWidth = ImGui.GetContentRegionAvail().X - 80; // Reserve space for send button
-            
-            ImGui.SetNextItemWidth(inputWidth);
-            
-            var placeholder = $"Message {dmTab.Player.Name}...";
-            
-            // Use simple InputText instead of InputTextWithHint to avoid crashes
-            // Don't auto-focus to avoid interfering with context menus
-            var inputFlags = ImGuiInputTextFlags.EnterReturnsTrue;
-            
-            // Ensure _dmInputText is never null
-            _dmInputText ??= string.Empty;
-            
-            // Draw placeholder text manually if input is empty
-            if (string.IsNullOrEmpty(_dmInputText))
-            {
-                var placeholderColor = ImGui.GetColorU32(ImGuiCol.TextDisabled);
-                var drawList = ImGui.GetWindowDrawList();
-                var cursorPos = ImGui.GetCursorScreenPos();
-                
-                // Draw the input field first
-                var inputResult = false;
-                try
-                {
-                    inputResult = ImGui.InputText("##dm-input", ref _dmInputText, 500, inputFlags);
-                }
-                catch (Exception inputEx)
-                {
-                    Plugin.Log.Warning(inputEx, "InputText failed, using fallback");
-                    // Fallback: just show instruction text
-                    ImGui.Text($"Input error - use: /tell {dmTab.Player.DisplayName} <message>");
-                    return;
-                }
-                
-                if (inputResult && !string.IsNullOrWhiteSpace(_dmInputText))
-                {
-                    SendDMMessage(dmTab, _dmInputText);
-                    _dmInputText = string.Empty; // Clear input after sending
-                }
-                
-                // Draw placeholder text over the input if it's empty and not focused
-                if (string.IsNullOrEmpty(_dmInputText) && !ImGui.IsItemActive())
-                {
-                    try
-                    {
-                        var padding = ImGui.GetStyle().FramePadding;
-                        drawList.AddText(new Vector2(cursorPos.X + padding.X, cursorPos.Y + padding.Y), placeholderColor, placeholder);
-                    }
-                    catch (Exception drawEx)
-                    {
-                        Plugin.Log.Debug(drawEx, "Failed to draw placeholder text");
-                        // Non-critical, continue without placeholder
-                    }
-                }
-            }
-            else
-            {
-                // Normal input when there's text
-                var inputResult = false;
-                try
-                {
-                    inputResult = ImGui.InputText("##dm-input", ref _dmInputText, 500, inputFlags);
-                }
-                catch (Exception inputEx)
-                {
-                    Plugin.Log.Warning(inputEx, "InputText failed, clearing input");
-                    _dmInputText = string.Empty; // Clear potentially corrupted input
-                    return;
-                }
-                
-                if (inputResult && !string.IsNullOrWhiteSpace(_dmInputText))
-                {
-                    SendDMMessage(dmTab, _dmInputText);
-                    _dmInputText = string.Empty; // Clear input after sending
-                }
-            }
-            
-            ImGui.SameLine();
-            
-            // Send button
-            var sendEnabled = !string.IsNullOrWhiteSpace(_dmInputText);
-            using var disabled = ImRaii.Disabled(!sendEnabled);
-            
-            if (ImGui.Button("Send") && sendEnabled)
-            {
-                SendDMMessage(dmTab, _dmInputText);
-                _dmInputText = string.Empty; // Clear input after sending
-            }
+            if (DMManager.Instance.IsKnownDMPlayer(tab.Name))
+                return true;
         }
-        catch (Exception ex)
+        catch
         {
-            Plugin.Log.Error(ex, "Critical error in DrawDMInputArea, falling back to instruction text");
-            
-            // Fallback to instruction text if anything goes wrong
-            ImGui.Text($"DM input error - use regular chat:");
-            ImGui.Text($"/tell {dmTab.Player.DisplayName} <message>");
-            
-            // Reset input state to prevent recurring errors
-            _dmInputText = string.Empty;
-        }
-    }
-    
-    private void SendDMMessage(DMTab dmTab, string message)
-    {
-        if (string.IsNullOrWhiteSpace(message))
-            return;
-            
-        var trimmed = message.Trim();
-        
-        // Send the message as a tell to the DM target
-        var tellCommand = $"/tell {dmTab.Player.DisplayName} {trimmed}";
-        
-        // Track outgoing tell for proper routing
-        Plugin.DMMessageRouter.TrackOutgoingTell(dmTab.Player);
-        
-        // Send the tell command
-        ChatBox.SendMessage(tellCommand);
-    }
-
-    private Tab? GetActiveRegularTab()
-    {
-        var activeRegularTabIndex = GetActiveRegularTabIndex();
-        if (activeRegularTabIndex >= 0 && activeRegularTabIndex < Plugin.Config.Tabs.Count)
-        {
-            var tab = Plugin.Config.Tabs[activeRegularTabIndex];
-            if (!(tab is DMTab) && !tab.PopOut)
-                return tab;
+            // If DMManager isn't ready, fall back to pattern matching
         }
         
-        // Fallback to first regular tab
-        return Plugin.Config.Tabs
-            .FirstOrDefault(tab => !tab.PopOut && !(tab is DMTab));
-    }
-
-    private void DrawDMTabContextMenu(DMTab dmTab, int tabIndex)
-    {
-        using var contextMenu = ImRaii.ContextPopupItem($"dm-tab-context-menu-{tabIndex}");
-        if (!contextMenu.Success)
-            return;
-
-        if (ImGui.MenuItem("Pop Out to Window"))
-        {
-            DMManager.Instance.ConvertTabToWindow(dmTab.Player);
-        }
+        // Pattern-based detection as fallback
+        // Check if the tab has only Tell chat codes (typical for DM tabs)
+        var hasTellCodes = tab.ChatCodes.ContainsKey(ChatType.TellIncoming) || 
+                          tab.ChatCodes.ContainsKey(ChatType.TellOutgoing);
         
-        if (ImGui.MenuItem("Close DM"))
-        {
-            DMManager.Instance.CloseDMTab(dmTab.Player);
-        }
+        // Check if it has very few chat codes (DM tabs typically only have Tell codes)
+        var hasLimitedChatCodes = tab.ChatCodes.Count <= 3; // Tell incoming, outgoing, and maybe one more
         
-        ImGui.Separator();
+        // Check if the name doesn't match common tab names
+        var commonTabNames = new[] { "General", "Battle", "Event", "Say", "Shout", "Tell", "Party", "Alliance", "FC", "LS", "CWLS", "Novice Network", "Custom" };
+        var isNotCommonTabName = !commonTabNames.Any(common => tab.Name.Contains(common, StringComparison.OrdinalIgnoreCase));
         
-        if (ImGui.MenuItem("Add Friend"))
-        {
-            try
-            {
-                var friendCommand = $"/friendlist add {dmTab.Player.DisplayName}";
-                ChatBox.SendMessage(friendCommand);
-            }
-            catch (Exception ex)
-            {
-                Plugin.Log.Error($"Failed to add {dmTab.Player} as friend: {ex.Message}");
-            }
-        }
+        // Check if the name looks like a player name (contains letters and possibly spaces, but not special symbols)
+        var looksLikePlayerName = !string.IsNullOrEmpty(tab.Name) && 
+                                 tab.Name.All(c => char.IsLetter(c) || char.IsWhiteSpace(c) || c == '\'' || c == '-') &&
+                                 tab.Name.Any(char.IsLetter);
         
-        if (ImGui.MenuItem("Invite to Party"))
-        {
-            try
-            {
-                var inviteCommand = $"/invite {dmTab.Player.DisplayName}";
-                ChatBox.SendMessage(inviteCommand);
-            }
-            catch (Exception ex)
-            {
-                Plugin.Log.Error($"Failed to invite {dmTab.Player} to party: {ex.Message}");
-            }
-        }
+        return hasTellCodes && hasLimitedChatCodes && isNotCommonTabName && looksLikePlayerName;
     }
 
     private unsafe void DrawNormalChatPane()
@@ -1428,10 +723,10 @@ public sealed class ChatLogWindow : Window
         using (ImRaii.PushColor(ImGuiCol.Text, push ? ColourUtil.RgbaToAbgr(inputColour!.Value) : 0, push))
         {
             var isChatEnabled = activeTab is { InputDisabled: false };
-            // CRITICAL FIX: Don't set keyboard focus when DM tabs are active to prevent focus fights
+            // CRITICAL FIX: Don't set keyboard focus when DM windows are active to prevent focus fights
             // This was causing the "has focus now" -> "lost focus" cycle that breaks context menus
-            var hasDMTabs = GetActiveDMTab() != null;
-            if (isChatEnabled && (Activate || FocusedPreview) && !hasDMTabs)
+            var hasDMWindows = DMManager.Instance.GetOpenDMWindows().Any();
+            if (isChatEnabled && (Activate || FocusedPreview) && !hasDMWindows)
             {
                 FocusedPreview = false;
                 ImGui.SetKeyboardFocusHere();
@@ -1445,7 +740,7 @@ public sealed class ChatLogWindow : Window
                 
                 // Enhanced input field with better visual feedback
                 var hasError = isCommand && !IsValidCommand(Chat.Split(' ')[0]);
-                var (styleScope, colorScope) = ModernUI.PushEnhancedInputStyle(Plugin.Config, InputFocused, hasError);
+                var (styleScope, colorScope) = ModernUI.PushEnhancedInputStyle(Plugin.Config, InputFocused, hasError, CurrentUIAlpha);
                 using (styleScope)
                 using (colorScope)
                 {
@@ -1627,10 +922,10 @@ public sealed class ChatLogWindow : Window
         using (ImRaii.PushColor(ImGuiCol.Text, push ? ColourUtil.RgbaToAbgr(inputColour!.Value) : 0, push))
         {
             var isChatEnabled = activeTab is { InputDisabled: false };
-            // CRITICAL FIX: Don't set keyboard focus when DM tabs are active to prevent focus fights
+            // CRITICAL FIX: Don't set keyboard focus when DM windows are active to prevent focus fights
             // This was causing the "has focus now" -> "lost focus" cycle that breaks context menus
-            var hasDMTabs = GetActiveDMTab() != null;
-            if (isChatEnabled && (Activate || FocusedPreview) && !hasDMTabs)
+            var hasDMWindows = DMManager.Instance.GetOpenDMWindows().Any();
+            if (isChatEnabled && (Activate || FocusedPreview) && !hasDMWindows)
             {
                 FocusedPreview = false;
                 ImGui.SetKeyboardFocusHere();
@@ -1642,7 +937,7 @@ public sealed class ChatLogWindow : Window
                 ImGui.SetNextItemWidth(inputWidth);
                 
                 var hasError = isCommand && !IsValidCommand(Chat.Split(' ')[0]);
-                var (styleScope, colorScope) = ModernUI.PushEnhancedInputStyle(Plugin.Config, InputFocused, hasError);
+                var (styleScope, colorScope) = ModernUI.PushEnhancedInputStyle(Plugin.Config, InputFocused, hasError, CurrentUIAlpha);
                 using (styleScope)
                 using (colorScope)
                 {
@@ -1781,7 +1076,7 @@ public sealed class ChatLogWindow : Window
         return channels;
     }
 
-    private void DrawChannelName(Tab activeTab)
+    public void DrawChannelName(Tab activeTab)
     {
         var currentChannel = ReadChannelName(activeTab);
         if (!currentChannel.SequenceEqual(PreviousChannel))
@@ -2245,7 +1540,7 @@ public sealed class ChatLogWindow : Window
         }
     }
 
-    internal void DrawMessageLog(Tab tab, PayloadHandler handler, float childHeight, bool switchedTab)
+    public void DrawMessageLog(Tab tab, PayloadHandler handler, float childHeight, bool switchedTab)
     {
         // Use unique child window IDs to prevent conflicts between DM pane and regular chat
         var childId = tab is DMTab ? "##chat2-dm-messages" : "##chat2-messages";
@@ -2489,6 +1784,10 @@ public sealed class ChatLogWindow : Window
                 var tab = Plugin.Config.Tabs[tabI];
                 if (tab.PopOut)
                     continue;
+                
+                // Skip DM tabs if DM section is popped out to separate window
+                if (Plugin.Config.DMSectionPoppedOut && (tab is DMTab || IsLikelyDMTab(tab)))
+                    continue;
 
                 // Modern unread indicator with badge styling
                 var unread = tabI == Plugin.LastTab || tab.UnreadMode == UnreadMode.None || tab.Unread == 0 
@@ -2527,35 +1826,65 @@ public sealed class ChatLogWindow : Window
                     tabLabel = $"{icon.ToIconString()} {tabName}{unread}";
                 }
 
-                using var tabItem = ImRaii.TabItem($"{tabLabel}###log-tab-{tabI}", flags);
-                
-                // Handle drag and drop reordering
-                if (ModernUI.HandleTabDragDrop(tabI, Plugin.Config.Tabs, Plugin.Config))
-                    Plugin.SaveConfig();
-                
-                // Check for popout during each tab's drag operation
-                if (ModernUI.CheckDragToPopout(Plugin.Config.Tabs, Plugin.Config))
-                    Plugin.SaveConfig();
-                
-                DrawTabContextMenu(tab, tabI);
-
-                if (!tabItem.Success)
-                    continue;
-
-                var hasTabSwitched = Plugin.LastTab != tabI;
-                Plugin.LastTab = tabI;
-
-                if (hasTabSwitched)
-                    TabSwitched(tab, previousTab);
-
-                // Clear unread indicators - for DM tabs, also clear the DM history unread count
-                tab.Unread = 0;
-                if (tab is DMTab dmTabForClear)
+                // For DM tabs, add inline action buttons
+                if (tab is DMTab dmTabForButtons)
                 {
-                    dmTabForClear.MarkAsRead();
+                    using var tabItem = ImRaii.TabItem($"{tabLabel}###log-tab-{tabI}", flags);
+                    
+                    // Handle drag and drop reordering
+                    if (ModernUI.HandleTabDragDrop(tabI, Plugin.Config.Tabs, Plugin.Config))
+                        Plugin.SaveConfig();
+                    
+                    // Check for popout during each tab's drag operation
+                    if (ModernUI.CheckDragToPopout(Plugin.Config.Tabs, Plugin.Config))
+                        Plugin.SaveConfig();
+                    
+                    DrawTabContextMenu(tab, tabI);
+
+                    if (!tabItem.Success)
+                        continue;
+
+                    var hasTabSwitched = Plugin.LastTab != tabI;
+                    Plugin.LastTab = tabI;
+
+                    if (hasTabSwitched)
+                        TabSwitched(tab, previousTab);
+
+                    // Clear unread indicators - for DM tabs, also clear the DM history unread count
+                    tab.Unread = 0;
+                    dmTabForButtons.MarkAsRead();
+                    
+                    DrawMessageLog(tab, PayloadHandler, GetRemainingHeightForMessageLog(), hasTabSwitched);
                 }
-                
-                DrawMessageLog(tab, PayloadHandler, GetRemainingHeightForMessageLog(), hasTabSwitched);
+                else
+                {
+                    // Regular tab handling
+                    using var tabItem = ImRaii.TabItem($"{tabLabel}###log-tab-{tabI}", flags);
+                    
+                    // Handle drag and drop reordering
+                    if (ModernUI.HandleTabDragDrop(tabI, Plugin.Config.Tabs, Plugin.Config))
+                        Plugin.SaveConfig();
+                    
+                    // Check for popout during each tab's drag operation
+                    if (ModernUI.CheckDragToPopout(Plugin.Config.Tabs, Plugin.Config))
+                        Plugin.SaveConfig();
+                    
+                    DrawTabContextMenu(tab, tabI);
+
+                    if (!tabItem.Success)
+                        continue;
+
+                    var hasTabSwitched = Plugin.LastTab != tabI;
+                    Plugin.LastTab = tabI;
+
+                    if (hasTabSwitched)
+                        TabSwitched(tab, previousTab);
+
+                    // Clear unread indicators
+                    tab.Unread = 0;
+                    
+                    DrawMessageLog(tab, PayloadHandler, GetRemainingHeightForMessageLog(), hasTabSwitched);
+                }
             }
 
             Plugin.WantedTab = null;
@@ -2587,6 +1916,10 @@ public sealed class ChatLogWindow : Window
                     var tab = Plugin.Config.Tabs[tabI];
                     if (tab.PopOut)
                         continue;
+                    
+                    // Skip DM tabs if DM section is popped out to separate window
+                    if (Plugin.Config.DMSectionPoppedOut && (tab is DMTab || IsLikelyDMTab(tab)))
+                        continue;
 
                     var unread = tabI == Plugin.LastTab || tab.UnreadMode == UnreadMode.None || tab.Unread == 0 ? "" : $" ({tab.Unread})";
                     
@@ -2607,26 +1940,85 @@ public sealed class ChatLogWindow : Window
                         tabLabel = $"{icon.ToIconString()} {tabName}{unread}";
                     }
                     
-                    var clicked = ImGui.Selectable($"{tabLabel}###log-tab-{tabI}", Plugin.LastTab == tabI || Plugin.WantedTab == tabI);
-                    
-                    // Handle drag and drop reordering for sidebar
-                    if (ModernUI.HandleTabDragDrop(tabI, Plugin.Config.Tabs, Plugin.Config))
-                        Plugin.SaveConfig();
-                    
-                    // Check for popout during each tab's drag operation
-                    if (ModernUI.CheckDragToPopout(Plugin.Config.Tabs, Plugin.Config))
-                        Plugin.SaveConfig();
-                    
-                    DrawTabContextMenu(tab, tabI);
+                    // For DM tabs, handle selection and buttons differently
+                    if (tab is DMTab dmTabForSidebar)
+                    {
+                        var clicked = ImGui.Selectable($"{tabLabel}###log-tab-{tabI}", Plugin.LastTab == tabI || Plugin.WantedTab == tabI);
+                        
+                        // Add DM tab buttons below the selectable
+                        var buttonSize = ImGui.GetFrameHeight() * 0.6f; // Smaller buttons for sidebar
+                        
+                        // Pop out button
+                        using (ModernUI.PushModernButtonStyle(Plugin.Config))
+                        {
+                            if (ImGuiUtil.IconButton(FontAwesomeIcon.ExternalLinkAlt, id: "##dm-sidebar-popout-" + tabI, width: (int)buttonSize))
+                            {
+                                DMManager.Instance.ConvertTabToWindow(dmTabForSidebar.Player);
+                                Plugin.SaveConfig();
+                            }
+                        }
+                        
+                        if (ImGui.IsItemHovered())
+                            ModernUI.DrawModernTooltip("Pop Out to DM Window", Plugin.Config);
+                        
+                        ImGui.SameLine();
+                        
+                        // Close button
+                        using (ModernUI.PushModernButtonStyle(Plugin.Config))
+                        {
+                            if (ImGuiUtil.IconButton(FontAwesomeIcon.Times, id: "##dm-sidebar-close-" + tabI, width: (int)buttonSize))
+                            {
+                                DMManager.Instance.CloseDMTab(dmTabForSidebar.Player);
+                                Plugin.SaveConfig();
+                            }
+                        }
+                        
+                        if (ImGui.IsItemHovered())
+                            ModernUI.DrawModernTooltip("Close DM Tab", Plugin.Config);
+                        
+                        // Handle drag and drop reordering for sidebar
+                        if (ModernUI.HandleTabDragDrop(tabI, Plugin.Config.Tabs, Plugin.Config))
+                            Plugin.SaveConfig();
+                        
+                        // Check for popout during each tab's drag operation
+                        if (ModernUI.CheckDragToPopout(Plugin.Config.Tabs, Plugin.Config))
+                            Plugin.SaveConfig();
+                        
+                        DrawTabContextMenu(tab, tabI);
 
-                    if (!clicked && Plugin.WantedTab != tabI)
-                        continue;
+                        if (!clicked && Plugin.WantedTab != tabI)
+                            continue;
 
-                    currentTab = tabI;
-                    hasTabSwitched = Plugin.LastTab != tabI;
-                    Plugin.LastTab = tabI;
-                    if (hasTabSwitched)
-                        TabSwitched(tab, previousTab);
+                        currentTab = tabI;
+                        hasTabSwitched = Plugin.LastTab != tabI;
+                        Plugin.LastTab = tabI;
+                        if (hasTabSwitched)
+                            TabSwitched(tab, previousTab);
+                    }
+                    else
+                    {
+                        // Regular tab handling for sidebar
+                        var clicked = ImGui.Selectable($"{tabLabel}###log-tab-{tabI}", Plugin.LastTab == tabI || Plugin.WantedTab == tabI);
+                        
+                        // Handle drag and drop reordering for sidebar
+                        if (ModernUI.HandleTabDragDrop(tabI, Plugin.Config.Tabs, Plugin.Config))
+                            Plugin.SaveConfig();
+                        
+                        // Check for popout during each tab's drag operation
+                        if (ModernUI.CheckDragToPopout(Plugin.Config.Tabs, Plugin.Config))
+                            Plugin.SaveConfig();
+                        
+                        DrawTabContextMenu(tab, tabI);
+
+                        if (!clicked && Plugin.WantedTab != tabI)
+                            continue;
+
+                        currentTab = tabI;
+                        hasTabSwitched = Plugin.LastTab != tabI;
+                        Plugin.LastTab = tabI;
+                        if (hasTabSwitched)
+                            TabSwitched(tab, previousTab);
+                    }
                 }
                 
                 // Check for drag-to-popout in sidebar
@@ -3037,7 +2429,7 @@ public sealed class ChatLogWindow : Window
         return 0;
     }
 
-    private unsafe int Callback(scoped ref ImGuiInputTextCallbackData data)
+    public unsafe int Callback(scoped ref ImGuiInputTextCallbackData data)
     {
         // We play the opening sound here only if closing sound has been played before
         if (Plugin.Config.PlaySounds && PlayedClosingSound)

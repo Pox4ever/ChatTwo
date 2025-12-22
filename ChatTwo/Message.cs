@@ -55,7 +55,7 @@ internal class SortCode
     }
 }
 
-internal partial class Message
+public partial class Message
 {
     internal Guid Id { get; } = Guid.NewGuid();
     internal ulong Receiver { get; }

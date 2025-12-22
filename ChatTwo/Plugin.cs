@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using ChatTwo.Code;
 using ChatTwo.DM;
 using ChatTwo.Http;
 using ChatTwo.Ipc;
@@ -52,6 +53,7 @@ public sealed class Plugin : IDalamudPlugin
     public CommandHelpWindow CommandHelpWindow { get; }
     public SeStringDebugger SeStringDebugger { get; }
     public DebuggerWindow DebuggerWindow { get; }
+    public DMSectionWindow DMSectionWindow { get; }
 
     internal Commands Commands { get; }
     internal GameFunctions.GameFunctions Functions { get; }
@@ -111,6 +113,10 @@ public sealed class Plugin : IDalamudPlugin
             // Initialize DMManager with Plugin instance
             DMManager.Instance.Initialize(this);
             
+            // Fix DM tabs that were deserialized as regular Tab objects
+            // This must be done after DMManager is initialized
+            FixDeserializedDMTabs();
+            
             Ipc = new IpcManager();
             TypingIpc = new TypingIpc(this);
             ExtraChat = new ExtraChat(this);
@@ -123,6 +129,7 @@ public sealed class Plugin : IDalamudPlugin
             CommandHelpWindow = new CommandHelpWindow(ChatLogWindow);
             SeStringDebugger = new SeStringDebugger(this);
             DebuggerWindow = new DebuggerWindow(this);
+            DMSectionWindow = new DMSectionWindow(this, ChatLogWindow);
 
             WindowSystem.AddWindow(ChatLogWindow);
             WindowSystem.AddWindow(SettingsWindow);
@@ -131,6 +138,7 @@ public sealed class Plugin : IDalamudPlugin
             WindowSystem.AddWindow(CommandHelpWindow);
             WindowSystem.AddWindow(SeStringDebugger);
             WindowSystem.AddWindow(DebuggerWindow);
+            WindowSystem.AddWindow(DMSectionWindow);
 
             FontManager.BuildFonts();
 
@@ -236,6 +244,132 @@ public sealed class Plugin : IDalamudPlugin
     internal void SaveConfig()
     {
         Interface.SavePluginConfig(Config);
+    }
+    
+    /// <summary>
+    /// Fixes DM tabs that were deserialized as regular Tab objects due to JSON serialization limitations.
+    /// This should be called after loading the configuration to restore proper DMTab instances.
+    /// </summary>
+    private void FixDeserializedDMTabs()
+    {
+        var tabsToReplace = new List<(int index, DMTab dmTab)>();
+        
+        for (int i = 0; i < Config.Tabs.Count; i++)
+        {
+            var tab = Config.Tabs[i];
+            
+            // Check if this looks like a DM tab that was deserialized as a regular Tab
+            // We identify DM tabs by checking if they have tell-only chat codes and player-like names
+            if (tab is not DMTab && IsLikelyDMTabByPattern(tab))
+            {
+                Plugin.Log.Info($"Converting deserialized Tab '{tab.Name}' back to DMTab (pattern-based detection)");
+                
+                // Try to extract player info from the tab
+                var dmPlayer = TryCreateDMPlayerFromTab(tab);
+                if (dmPlayer != null)
+                {
+                    // Create a new DMTab with the same properties as the original tab
+                    var dmTab = new DMTab(dmPlayer)
+                    {
+                        Name = tab.Name,
+                        ChatCodes = tab.ChatCodes,
+                        ExtraChatAll = tab.ExtraChatAll,
+                        ExtraChatChannels = tab.ExtraChatChannels,
+                        UnreadMode = tab.UnreadMode,
+                        UnhideOnActivity = tab.UnhideOnActivity,
+                        Unread = tab.Unread,
+                        LastActivity = tab.LastActivity,
+                        DisplayTimestamp = tab.DisplayTimestamp,
+                        Channel = tab.Channel,
+                        PopOut = tab.PopOut,
+                        IndependentOpacity = tab.IndependentOpacity,
+                        Opacity = tab.Opacity,
+                        InputDisabled = tab.InputDisabled,
+                        CurrentChannel = tab.CurrentChannel,
+                        CanMove = tab.CanMove,
+                        CanResize = tab.CanResize,
+                        IndependentHide = tab.IndependentHide,
+                        HideDuringCutscenes = tab.HideDuringCutscenes,
+                        HideWhenNotLoggedIn = tab.HideWhenNotLoggedIn,
+                        HideWhenUiHidden = tab.HideWhenUiHidden,
+                        HideInLoadingScreens = tab.HideInLoadingScreens,
+                        HideInBattle = tab.HideInBattle,
+                        HideWhenInactive = tab.HideWhenInactive,
+                        Identifier = tab.Identifier
+                    };
+                    
+                    // Copy messages if any exist
+                    dmTab.Messages = tab.Messages;
+                    
+                    tabsToReplace.Add((i, dmTab));
+                }
+            }
+        }
+        
+        // Replace the tabs
+        foreach (var (index, dmTab) in tabsToReplace)
+        {
+            Config.Tabs[index] = dmTab;
+        }
+        
+        if (tabsToReplace.Count > 0)
+        {
+            Plugin.Log.Info($"Converted {tabsToReplace.Count} deserialized Tab objects back to DMTab objects");
+            SaveConfig(); // Save the corrected configuration
+        }
+    }
+    
+    /// <summary>
+    /// Checks if a tab is likely a DM tab based on its configuration pattern.
+    /// DM tabs typically have only Tell chat codes and player-like names.
+    /// </summary>
+    private bool IsLikelyDMTabByPattern(Tab tab)
+    {
+        // Check if the tab has only Tell chat codes (typical for DM tabs)
+        var hasTellCodes = tab.ChatCodes.ContainsKey(ChatType.TellIncoming) || 
+                          tab.ChatCodes.ContainsKey(ChatType.TellOutgoing);
+        
+        // Check if it has very few chat codes (DM tabs typically only have Tell codes)
+        var hasLimitedChatCodes = tab.ChatCodes.Count <= 3; // Tell incoming, outgoing, and maybe one more
+        
+        // Check if the name doesn't match common tab names
+        var commonTabNames = new[] { "General", "Battle", "Event", "Say", "Shout", "Tell", "Party", "Alliance", "FC", "LS", "CWLS", "Novice Network", "Custom" };
+        var isNotCommonTabName = !commonTabNames.Any(common => tab.Name.Contains(common, StringComparison.OrdinalIgnoreCase));
+        
+        // Check if the name looks like a player name (contains letters and possibly spaces, but not special symbols)
+        var looksLikePlayerName = !string.IsNullOrEmpty(tab.Name) && 
+                                 tab.Name.All(c => char.IsLetter(c) || char.IsWhiteSpace(c) || c == '\'' || c == '-') &&
+                                 tab.Name.Any(char.IsLetter);
+        
+        return hasTellCodes && hasLimitedChatCodes && isNotCommonTabName && looksLikePlayerName;
+    }
+    
+    /// <summary>
+    /// Tries to create a DMPlayer from a tab's information.
+    /// Since we don't have the original world ID, we'll use the current player's world as a fallback.
+    /// </summary>
+    private DMPlayer? TryCreateDMPlayerFromTab(Tab tab)
+    {
+        if (string.IsNullOrEmpty(tab.Name))
+            return null;
+            
+        try
+        {
+            // Use current player's world as fallback since we don't have the original world ID
+            var worldId = ClientState.LocalPlayer?.HomeWorld.RowId ?? 0;
+            if (worldId == 0)
+            {
+                Plugin.Log.Warning($"Cannot create DMPlayer for '{tab.Name}' - no world ID available");
+                return null;
+            }
+            
+            return new DMPlayer(tab.Name, worldId);
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to create DMPlayer from tab '{tab.Name}': {ex.Message}");
+            return null;
+        }
     }
 
     internal void LanguageChanged(string langCode)

@@ -1,4 +1,5 @@
 ﻿using System.Numerics;
+using System.Text;
 using ChatTwo.Code;
 using ChatTwo.DM;
 using ChatTwo.GameFunctions;
@@ -11,6 +12,7 @@ using Dalamud.Interface.Utility;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using Dalamud.Bindings.ImGui;
+using Lumina.Excel.Sheets;
 
 namespace ChatTwo.Ui;
 
@@ -85,8 +87,8 @@ internal class Popout : Window
 
         if (!ChatLogWindow.PopOutDocked[Idx])
         {
-            var alpha = Tab.IndependentOpacity ? Tab.Opacity : Plugin.Config.WindowAlpha;
-            BgAlpha = alpha / 100f;
+            // BgAlpha is now set in Draw() method for proper focus-based transparency
+            // Don't set it here as it would override the focus-based transparency
         }
     }
 
@@ -94,6 +96,51 @@ internal class Popout : Window
     {
         using var id = ImRaii.PushId($"popout-{Tab.Identifier}");
 
+        // Calculate UI alpha for transparency
+        var isWindowFocused = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
+        var uiAlpha = isWindowFocused ? 1.0f : (Plugin.Config.UnfocusedTransparency / 100f);
+
+        // Update focus state and apply transparency
+        if (!ChatLogWindow.PopOutDocked[Idx])
+        {
+            var alpha = Tab.IndependentOpacity ? Tab.Opacity : Plugin.Config.WindowAlpha;
+            
+            if (!isWindowFocused)
+            {
+                var transparencyFactor = Plugin.Config.UnfocusedTransparency / 100f;
+                BgAlpha = (alpha / 100f) * transparencyFactor;
+            }
+            else
+            {
+                BgAlpha = alpha / 100f;
+            }
+            
+            // Push style colors for UI elements with transparency
+            using var textColor = ImRaii.PushColor(ImGuiCol.Text, ImGui.GetColorU32(ImGuiCol.Text) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+            using var buttonColor = ImRaii.PushColor(ImGuiCol.Button, ImGui.GetColorU32(ImGuiCol.Button) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+            using var buttonHoveredColor = ImRaii.PushColor(ImGuiCol.ButtonHovered, ImGui.GetColorU32(ImGuiCol.ButtonHovered) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+            using var buttonActiveColor = ImRaii.PushColor(ImGuiCol.ButtonActive, ImGui.GetColorU32(ImGuiCol.ButtonActive) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+            using var frameColor = ImRaii.PushColor(ImGuiCol.FrameBg, ImGui.GetColorU32(ImGuiCol.FrameBg) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+            using var frameHoveredColor = ImRaii.PushColor(ImGuiCol.FrameBgHovered, ImGui.GetColorU32(ImGuiCol.FrameBgHovered) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+            using var frameActiveColor = ImRaii.PushColor(ImGuiCol.FrameBgActive, ImGui.GetColorU32(ImGuiCol.FrameBgActive) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+            using var tabColor = ImRaii.PushColor(ImGuiCol.Tab, ImGui.GetColorU32(ImGuiCol.Tab) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+            using var tabHoveredColor = ImRaii.PushColor(ImGuiCol.TabHovered, ImGui.GetColorU32(ImGuiCol.TabHovered) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+            using var tabActiveColor = ImRaii.PushColor(ImGuiCol.TabActive, ImGui.GetColorU32(ImGuiCol.TabActive) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+            using var separatorColor = ImRaii.PushColor(ImGuiCol.Separator, ImGui.GetColorU32(ImGuiCol.Separator) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+
+            DrawPopoutContent(uiAlpha);
+        }
+        else
+        {
+            DrawPopoutContent(uiAlpha);
+        }
+
+        if (ImGui.IsWindowHovered(ImGuiHoveredFlags.ChildWindows))
+            LastActivityTime = FrameTime;
+    }
+    
+    private void DrawPopoutContent(float uiAlpha = 1.0f)
+    {
         if (!Plugin.Config.ShowPopOutTitleBar)
         {
             ImGui.TextUnformatted(Tab.Name);
@@ -108,13 +155,10 @@ internal class Popout : Window
         ChatLogWindow.DrawMessageLog(Tab, handler, messageLogHeight, false);
 
         // Draw input area
-        DrawPopoutInputArea();
-
-        if (ImGui.IsWindowHovered(ImGuiHoveredFlags.ChildWindows))
-            LastActivityTime = FrameTime;
+        DrawPopoutInputArea(uiAlpha);
     }
     
-    private void DrawPopoutInputArea()
+    private void DrawPopoutInputArea(float uiAlpha = 1.0f)
     {
         ImGui.Separator();
         
@@ -141,7 +185,10 @@ internal class Popout : Window
                     var channels = ChatLogWindow.GetValidChannels();
                     foreach (var (name, channel) in channels)
                         if (ImGui.Selectable(name))
-                            ChatLogWindow.SetChannel(channel);
+                        {
+                            // Set channel for this specific tab, not the main chat window
+                            Tab.CurrentChannel.SetChannel(channel);
+                        }
                 }
             }
 
@@ -186,7 +233,7 @@ internal class Popout : Window
                 
                 // Enhanced input field with better visual feedback
                 var hasError = isCommand && !ChatLogWindow.IsValidCommand(PopoutChat.Split(' ')[0]);
-                var (styleScope, colorScope) = ModernUI.PushEnhancedInputStyle(Plugin.Config, PopoutInputFocused, hasError);
+                var (styleScope, colorScope) = ModernUI.PushEnhancedInputStyle(Plugin.Config, PopoutInputFocused, hasError, uiAlpha);
                 using (styleScope)
                 using (colorScope)
                 {
@@ -228,7 +275,6 @@ internal class Popout : Window
                     if (Tab.CurrentChannel.UseTempChannel)
                     {
                         Tab.CurrentChannel.ResetTempChannel();
-                        ChatLogWindow.SetChannel(Tab.CurrentChannel.Channel);
                     }
                 }
             }
@@ -244,7 +290,6 @@ internal class Popout : Window
             if (!inputActive && Tab.CurrentChannel.UseTempChannel)
             {
                 Tab.CurrentChannel.ResetTempChannel();
-                ChatLogWindow.SetChannel(Tab.CurrentChannel.Channel);
             }
         }
     }
@@ -286,18 +331,66 @@ internal class Popout : Window
             return;
         }
             
-        // Use the main chat window's send functionality for regular tabs
-        var originalChat = ChatLogWindow.Chat;
-        ChatLogWindow.Chat = PopoutChat;
-        
+        // For regular tabs, send using the tab's own channel state (same logic as main chat)
         try
         {
-            ChatLogWindow.SendChatBox(Tab);
-            PopoutChat = string.Empty; // Clear input after sending
+            var trimmed = PopoutChat.Trim();
+            
+            // If it's a command, send it directly
+            if (trimmed.StartsWith('/'))
+            {
+                ChatBox.SendMessage(trimmed);
+            }
+            else
+            {
+                // Handle tell targets
+                var target = Tab.CurrentChannel.TempTellTarget ?? Tab.CurrentChannel.TellTarget;
+                if (target != null)
+                {
+                    // Use the same logic as main chat for tell targets
+                    if (target.ContentId == 0)
+                    {
+                        trimmed = $"/tell {target.ToTargetString()} {trimmed}";
+                        var tellBytes = Encoding.UTF8.GetBytes(trimmed);
+                        AutoTranslate.ReplaceWithPayload(ref tellBytes);
+                        ChatBox.SendMessageUnsafe(tellBytes);
+                    }
+                    else
+                    {
+                        var reason = target.Reason;
+                        var world = Sheets.WorldSheet.GetRow(target.World);
+                        if (world is { IsPublic: true })
+                        {
+                            if (reason == TellReason.Reply && GameFunctions.GameFunctions.GetFriends().Any(friend => friend.ContentId == target.ContentId))
+                                reason = TellReason.Friend;
+
+                            var tellBytes = Encoding.UTF8.GetBytes(trimmed);
+                            AutoTranslate.ReplaceWithPayload(ref tellBytes);
+                            ChatLogWindow.Plugin.Functions.Chat.SendTell(reason, target.ContentId, target.Name, (ushort) world.RowId, tellBytes, trimmed);
+                        }
+                    }
+                }
+                else
+                {
+                    // Use channel prefix (same logic as main chat)
+                    if (Tab.CurrentChannel.UseTempChannel)
+                        trimmed = $"{Tab.CurrentChannel.TempChannel.Prefix()} {trimmed}";
+                    else
+                        trimmed = $"{Tab.CurrentChannel.Channel.Prefix()} {trimmed}";
+                    
+                    var bytes = Encoding.UTF8.GetBytes(trimmed);
+                    AutoTranslate.ReplaceWithPayload(ref bytes);
+                    ChatBox.SendMessageUnsafe(bytes);
+                }
+            }
+            
+            // Reset temp channel and clear input (same as main chat)
+            Tab.CurrentChannel.ResetTempChannel();
+            PopoutChat = string.Empty;
         }
-        finally
+        catch (Exception ex)
         {
-            ChatLogWindow.Chat = originalChat; // Restore original chat
+            Plugin.Log.Error($"Failed to send message from popout: {ex.Message}");
         }
     }
 

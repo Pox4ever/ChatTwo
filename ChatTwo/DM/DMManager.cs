@@ -98,6 +98,24 @@ internal class DMManager
     {
         return _histories.Keys.ToList();
     }
+    
+    /// <summary>
+    /// Checks if a player name corresponds to a known DM player.
+    /// </summary>
+    public bool IsKnownDMPlayer(string playerName)
+    {
+        return _histories.Keys.Any(player => player.Name == playerName || player.TabName == playerName) ||
+               _openTabs.Keys.Any(player => player.Name == playerName || player.TabName == playerName);
+    }
+    
+    /// <summary>
+    /// Gets a DMPlayer by their name or tab name.
+    /// </summary>
+    public DMPlayer? GetDMPlayerByName(string playerName)
+    {
+        return _histories.Keys.FirstOrDefault(player => player.Name == playerName || player.TabName == playerName) ??
+               _openTabs.Keys.FirstOrDefault(player => player.Name == playerName || player.TabName == playerName);
+    }
 
     /// <summary>
     /// Removes the history for a specific player.
@@ -298,7 +316,25 @@ internal class DMManager
     /// <returns>True if a DM tab is open, false otherwise</returns>
     public bool HasOpenDMTab(DMPlayer player)
     {
-        return player != null && _openTabs.ContainsKey(player);
+        if (player == null)
+            return false;
+            
+        if (_openTabs.TryGetValue(player, out var dmTab))
+        {
+            // Check if the tab still exists in the configuration
+            if (Plugin.Config?.Tabs != null && Plugin.Config.Tabs.Contains(dmTab))
+            {
+                return true;
+            }
+            else
+            {
+                // Tab exists in tracking but not in config, remove it from tracking
+                _openTabs.TryRemove(player, out _);
+                return false;
+            }
+        }
+        
+        return false;
     }
 
     /// <summary>
@@ -309,6 +345,243 @@ internal class DMManager
     public bool HasOpenDM(DMPlayer player)
     {
         return HasOpenDMTab(player) || HasOpenDMWindow(player);
+    }
+    
+    /// <summary>
+    /// Cleans up stale DM window and tab references.
+    /// This should be called when settings change that affect DM visibility.
+    /// </summary>
+    public void CleanupStaleReferences()
+    {
+        try
+        {
+            Plugin.Log.Debug("CleanupStaleReferences: Starting cleanup of stale DM references");
+            
+            // Clean up closed windows
+            var staleWindows = new List<DMPlayer>();
+            foreach (var kvp in _openWindows)
+            {
+                if (!kvp.Value.IsOpen)
+                {
+                    staleWindows.Add(kvp.Key);
+                    Plugin.Log.Debug($"CleanupStaleReferences: Found stale window for {kvp.Key.DisplayName}");
+                }
+            }
+            
+            foreach (var player in staleWindows)
+            {
+                _openWindows.TryRemove(player, out _);
+                Plugin.Log.Debug($"CleanupStaleReferences: Removed stale window for {player.DisplayName}");
+            }
+            
+            // Clean up tabs that are no longer in the config
+            var staleTabs = new List<DMPlayer>();
+            if (Plugin.Config?.Tabs != null)
+            {
+                foreach (var kvp in _openTabs)
+                {
+                    var playerExists = false;
+                    foreach (var tab in Plugin.Config.Tabs)
+                    {
+                        if (tab is DMTab dmTab && dmTab.Player.Equals(kvp.Key))
+                        {
+                            playerExists = true;
+                            break;
+                        }
+                    }
+                    
+                    if (!playerExists)
+                    {
+                        staleTabs.Add(kvp.Key);
+                        Plugin.Log.Debug($"CleanupStaleReferences: Found stale tab for {kvp.Key.DisplayName}");
+                    }
+                }
+                
+                foreach (var player in staleTabs)
+                {
+                    _openTabs.TryRemove(player, out _);
+                    Plugin.Log.Debug($"CleanupStaleReferences: Removed stale tab for {player.DisplayName}");
+                }
+            }
+            
+            Plugin.Log.Debug($"CleanupStaleReferences: Cleanup complete. Removed {staleWindows.Count} windows and {staleTabs.Count} tabs");
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"CleanupStaleReferences: Error during cleanup: {ex.Message}");
+        }
+    }
+    
+    /// <summary>
+    /// Handles the DM section pop-out setting change.
+    /// Converts DM tabs between section window and main window based on the new setting and Default DM Mode.
+    /// </summary>
+    public void OnDMSectionToggled()
+    {
+        try
+        {
+            Plugin.Log.Info($"OnDMSectionToggled: Handling DM section toggle. DMSectionPoppedOut={Plugin.Config.DMSectionPoppedOut}, DefaultDMMode={Plugin.Config.DefaultDMMode}");
+            
+            if (Plugin.Config.DMSectionPoppedOut)
+            {
+                // Setting was turned ON - move DM tabs from main window to DM section window
+                Plugin.Log.Debug("OnDMSectionToggled: DM section popped out - tabs will be displayed in separate DM section window");
+                // The existing logic in ChatLogWindow and DMSectionWindow should handle this automatically
+                // Just ensure tracking is correct
+                if (Plugin.Config?.Tabs != null)
+                {
+                    foreach (var tab in Plugin.Config.Tabs)
+                    {
+                        if (tab is DMTab dmTab && !dmTab.PopOut)
+                        {
+                            // Ensure DM tab is tracked
+                            if (!_openTabs.ContainsKey(dmTab.Player))
+                            {
+                                _openTabs.TryAdd(dmTab.Player, dmTab);
+                                Plugin.Log.Debug($"OnDMSectionToggled: Added DM tab for {dmTab.Player.DisplayName} to tracking");
+                            }
+                        }
+                    }
+                }
+            }
+            else
+            {
+                // Setting was turned OFF - convert DM tabs based on Default DM Mode
+                Plugin.Log.Debug("OnDMSectionToggled: DM section closed - converting DM tabs based on Default DM Mode");
+                
+                // Get all current DM tabs that would have been in the DM section
+                var dmTabsToConvert = new List<DMTab>();
+                if (Plugin.Config?.Tabs != null)
+                {
+                    foreach (var tab in Plugin.Config.Tabs.ToList())
+                    {
+                        if (tab is DMTab dmTab && !dmTab.PopOut)
+                        {
+                            dmTabsToConvert.Add(dmTab);
+                        }
+                    }
+                }
+                
+                Plugin.Log.Debug($"OnDMSectionToggled: Found {dmTabsToConvert.Count} DM tabs to convert");
+                
+                // Convert each DM tab based on Default DM Mode
+                foreach (var dmTab in dmTabsToConvert)
+                {
+                    try
+                    {
+                        switch (Plugin.Config.DefaultDMMode)
+                        {
+                            case Configuration.DMDefaultMode.Window:
+                                Plugin.Log.Debug($"OnDMSectionToggled: Converting DM tab for {dmTab.Player.DisplayName} to window");
+                                
+                                // Ensure the tab is tracked before conversion
+                                if (!_openTabs.ContainsKey(dmTab.Player))
+                                {
+                                    _openTabs.TryAdd(dmTab.Player, dmTab);
+                                }
+                                
+                                // Convert tab to window
+                                var dmWindow = ConvertTabToWindow(dmTab.Player);
+                                if (dmWindow != null)
+                                {
+                                    Plugin.Log.Info($"OnDMSectionToggled: Successfully converted DM tab for {dmTab.Player.DisplayName} to window");
+                                }
+                                else
+                                {
+                                    Plugin.Log.Warning($"OnDMSectionToggled: Failed to convert DM tab for {dmTab.Player.DisplayName} to window");
+                                }
+                                break;
+                                
+                            case Configuration.DMDefaultMode.Tab:
+                            default:
+                                Plugin.Log.Debug($"OnDMSectionToggled: Keeping DM tab for {dmTab.Player.DisplayName} as tab in main window");
+                                // Tab stays as tab but will now appear in main window instead of DM section
+                                // Ensure it's properly tracked
+                                if (!_openTabs.ContainsKey(dmTab.Player))
+                                {
+                                    _openTabs.TryAdd(dmTab.Player, dmTab);
+                                }
+                                Plugin.Log.Debug($"OnDMSectionToggled: DM tab for {dmTab.Player.DisplayName} will remain as tab in main window");
+                                break;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Plugin.Log.Error($"OnDMSectionToggled: Failed to convert DM tab for {dmTab.Player.DisplayName}: {ex.Message}");
+                    }
+                }
+            }
+            
+            // Clean up any stale references after conversions
+            CleanupStaleReferences();
+            
+            Plugin.Log.Info("OnDMSectionToggled: DM section toggle handling completed");
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"OnDMSectionToggled: Error handling DM section toggle: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Manual test method to trigger DM conversion for debugging.
+    /// This can be called from a command or debug interface.
+    /// </summary>
+    public void TestDMConversion()
+    {
+        try
+        {
+            Plugin.Log.Info("TestDMConversion: Starting manual DM conversion test");
+            
+            // Get all current DM tabs
+            var dmTabs = new List<DMTab>();
+            if (Plugin.Config?.Tabs != null)
+            {
+                foreach (var tab in Plugin.Config.Tabs.ToList())
+                {
+                    if (tab is DMTab dmTab)
+                    {
+                        dmTabs.Add(dmTab);
+                        Plugin.Log.Info($"TestDMConversion: Found DM tab for {dmTab.Player.DisplayName}, PopOut={dmTab.PopOut}");
+                    }
+                }
+            }
+            
+            Plugin.Log.Info($"TestDMConversion: Found {dmTabs.Count} DM tabs total");
+            Plugin.Log.Info($"TestDMConversion: Current DefaultDMMode={Plugin.Config.DefaultDMMode}");
+            
+            // Try to convert the first DM tab to a window for testing
+            if (dmTabs.Count > 0)
+            {
+                var testTab = dmTabs[0];
+                Plugin.Log.Info($"TestDMConversion: Attempting to convert {testTab.Player.DisplayName} to window");
+                
+                // Ensure tracking
+                if (!_openTabs.ContainsKey(testTab.Player))
+                {
+                    _openTabs.TryAdd(testTab.Player, testTab);
+                    Plugin.Log.Info($"TestDMConversion: Added {testTab.Player.DisplayName} to tracking");
+                }
+                
+                var result = ConvertTabToWindow(testTab.Player);
+                if (result != null)
+                {
+                    Plugin.Log.Info($"TestDMConversion: Successfully converted {testTab.Player.DisplayName} to window");
+                }
+                else
+                {
+                    Plugin.Log.Error($"TestDMConversion: Failed to convert {testTab.Player.DisplayName} to window");
+                }
+            }
+            else
+            {
+                Plugin.Log.Info("TestDMConversion: No DM tabs found to test");
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"TestDMConversion: Error during test: {ex.Message}");
+        }
     }
 
     /// <summary>
