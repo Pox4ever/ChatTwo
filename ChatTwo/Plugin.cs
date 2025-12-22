@@ -147,6 +147,9 @@ public sealed class Plugin : IDalamudPlugin
 
             MessageManager = new MessageManager(this); // requires Ui
 
+            // Register debug command BEFORE Commands.Initialise() so it gets properly added
+            Commands.Register("/chat2debugdm", "Debug DM tab conversion", false).Execute += DebugDMCommand;
+
             // let all the other components register, then initialize commands
             Commands.Initialise();
 
@@ -192,6 +195,9 @@ public sealed class Plugin : IDalamudPlugin
     [SuppressMessage("ReSharper", "ConditionalAccessQualifierIsNonNullableAccordingToAPIContract")]
     public void Dispose()
     {
+        // Clean up debug command
+        Commands.Register("/chat2debugdm", "Debug DM tab conversion", false).Execute -= DebugDMCommand;
+        
         Interface.LanguageChanged -= LanguageChanged;
         Interface.UiBuilder.Draw -= Draw;
         Framework.Update -= FrameworkUpdate;
@@ -247,6 +253,194 @@ public sealed class Plugin : IDalamudPlugin
     }
     
     /// <summary>
+    /// Debug command handler for testing DM functionality.
+    /// </summary>
+    private void DebugDMCommand(string command, string arguments)
+    {
+        try
+        {
+            var args = arguments.Trim().ToLowerInvariant();
+            
+            switch (args)
+            {
+                case "convert":
+                case "":
+                    Plugin.Log.Info("Debug: Triggering DM tab conversion");
+                    DebugTriggerDMTabConversion();
+                    break;
+                    
+                case "state":
+                    Plugin.Log.Info("Debug: Logging current tab state");
+                    DebugLogTabState();
+                    break;
+                    
+                case "test":
+                    Plugin.Log.Info("Debug: Running DM conversion test");
+                    DMManager.Instance.TestDMConversion();
+                    break;
+                    
+                case "reload":
+                case "history":
+                    Plugin.Log.Info("Debug: Reloading history for current DM tab");
+                    DebugReloadCurrentDMHistory();
+                    break;
+                    
+                case "cleanup":
+                case "merge":
+                    Plugin.Log.Info("Debug: Cleaning up duplicate DM tabs");
+                    DebugCleanupDuplicateDMTabs();
+                    break;
+                    
+                default:
+                    Plugin.Log.Info("Debug DM Commands:");
+                    Plugin.Log.Info("  /chat2debugdm convert - Trigger DM tab conversion");
+                    Plugin.Log.Info("  /chat2debugdm state - Log current tab state");
+                    Plugin.Log.Info("  /chat2debugdm test - Run DM conversion test");
+                    Plugin.Log.Info("  /chat2debugdm reload - Reload history for current DM tab");
+                    Plugin.Log.Info("  /chat2debugdm cleanup - Clean up duplicate DM tabs");
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"DebugDMCommand: Error executing debug command: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Debug method to reload history for the current DM tab.
+    /// </summary>
+    private void DebugReloadCurrentDMHistory()
+    {
+        try
+        {
+            var currentTab = CurrentTab;
+            if (currentTab is DMTab dmTab)
+            {
+                Plugin.Log.Info($"DebugReloadCurrentDMHistory: Reloading history for current DM tab: {dmTab.Player.DisplayName}");
+                dmTab.DebugReloadHistory();
+            }
+            else
+            {
+                Plugin.Log.Info("DebugReloadCurrentDMHistory: Current tab is not a DM tab");
+                
+                // Try to find any DM tab
+                var firstDMTab = Config.Tabs.OfType<DMTab>().FirstOrDefault();
+                if (firstDMTab != null)
+                {
+                    Plugin.Log.Info($"DebugReloadCurrentDMHistory: Found DM tab for {firstDMTab.Player.DisplayName}, reloading its history");
+                    firstDMTab.DebugReloadHistory();
+                }
+                else
+                {
+                    Plugin.Log.Info("DebugReloadCurrentDMHistory: No DM tabs found");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"DebugReloadCurrentDMHistory: Error: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Debug method to clean up duplicate DM tabs for the same player.
+    /// </summary>
+    private void DebugCleanupDuplicateDMTabs()
+    {
+        try
+        {
+            Plugin.Log.Info("DebugCleanupDuplicateDMTabs: Starting cleanup of duplicate DM tabs");
+            
+            var dmTabs = Config.Tabs.OfType<DMTab>().ToList();
+            Plugin.Log.Info($"DebugCleanupDuplicateDMTabs: Found {dmTabs.Count} DM tabs");
+            
+            // Group DM tabs by normalized player name
+            var groupedTabs = dmTabs.GroupBy(tab => tab.GetNormalizedPlayerName()).ToList();
+            
+            var duplicatesFound = 0;
+            var tabsRemoved = 0;
+            
+            foreach (var group in groupedTabs)
+            {
+                var tabsForPlayer = group.ToList();
+                if (tabsForPlayer.Count > 1)
+                {
+                    duplicatesFound++;
+                    Plugin.Log.Info($"DebugCleanupDuplicateDMTabs: Found {tabsForPlayer.Count} duplicate tabs for player '{group.Key}':");
+                    
+                    // Log all duplicate tabs
+                    foreach (var tab in tabsForPlayer)
+                    {
+                        Plugin.Log.Info($"  - Tab: '{tab.Name}' (Player: '{tab.Player.Name}', World: {tab.Player.HomeWorld})");
+                    }
+                    
+                    // Keep the tab with the cleanest name (shortest, most basic)
+                    var tabToKeep = tabsForPlayer.OrderBy(t => t.Name.Length).ThenBy(t => t.Name).First();
+                    var tabsToRemove = tabsForPlayer.Where(t => t != tabToKeep).ToList();
+                    
+                    Plugin.Log.Info($"DebugCleanupDuplicateDMTabs: Keeping tab '{tabToKeep.Name}', removing {tabsToRemove.Count} duplicates");
+                    
+                    // Merge messages from duplicate tabs into the kept tab
+                    foreach (var tabToRemove in tabsToRemove)
+                    {
+                        try
+                        {
+                            using var messages = tabToRemove.Messages.GetReadOnly(1000);
+                            foreach (var message in messages)
+                            {
+                                tabToKeep.AddMessage(message, unread: false);
+                            }
+                            Plugin.Log.Info($"DebugCleanupDuplicateDMTabs: Merged {messages.Count} messages from '{tabToRemove.Name}' to '{tabToKeep.Name}'");
+                        }
+                        catch (Exception ex)
+                        {
+                            Plugin.Log.Warning($"DebugCleanupDuplicateDMTabs: Failed to merge messages from '{tabToRemove.Name}': {ex.Message}");
+                        }
+                        
+                        // Remove the duplicate tab
+                        Config.Tabs.Remove(tabToRemove);
+                        tabsRemoved++;
+                        Plugin.Log.Info($"DebugCleanupDuplicateDMTabs: Removed duplicate tab '{tabToRemove.Name}'");
+                    }
+                }
+            }
+            
+            if (tabsRemoved > 0)
+            {
+                SaveConfig();
+                Plugin.Log.Info($"DebugCleanupDuplicateDMTabs: Cleanup complete. Found {duplicatesFound} sets of duplicates, removed {tabsRemoved} duplicate tabs");
+            }
+            else
+            {
+                Plugin.Log.Info("DebugCleanupDuplicateDMTabs: No duplicate DM tabs found");
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"DebugCleanupDuplicateDMTabs: Error during cleanup: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Debug method to manually trigger DM tab conversion for testing.
+    /// </summary>
+    internal void DebugTriggerDMTabConversion()
+    {
+        try
+        {
+            Plugin.Log.Info("DebugTriggerDMTabConversion: Manually triggering DM tab conversion");
+            DebugLogTabState();
+            PerformTabConversion();
+            DebugLogTabState();
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"DebugTriggerDMTabConversion: Error during manual conversion: {ex.Message}");
+        }
+    }
+    
+    /// <summary>
     /// Debug method to log the current state of all tabs.
     /// </summary>
     internal void DebugLogTabState()
@@ -270,11 +464,66 @@ public sealed class Plugin : IDalamudPlugin
                 }
             }
             
+            // Also check what HasDMTabs would return
+            var dmTabsForSection = Config.Tabs.Where(tab => !tab.PopOut && tab is DMTab).ToList();
+            Plugin.Log.Info($"DM tabs that should be in DM Section Window: {dmTabsForSection.Count}");
+            foreach (var tab in dmTabsForSection)
+            {
+                if (tab is DMTab dmTab)
+                {
+                    Plugin.Log.Info($"  - {dmTab.Player.DisplayName} (PopOut={dmTab.PopOut})");
+                }
+            }
+            
             Plugin.Log.Info($"=== END DEBUG TAB STATE ===");
         }
         catch (Exception ex)
         {
             Plugin.Log.Error($"DebugLogTabState: Error logging tab state: {ex.Message}");
+        }
+    }
+    
+    /// <summary>
+    /// Fixes PopOut settings for existing DMTabs to ensure they appear in the DM Section Window.
+    /// </summary>
+    internal void FixDMTabPopOutSettings()
+    {
+        try
+        {
+            Plugin.Log.Info("FixDMTabPopOutSettings: Starting PopOut fix for existing DMTabs");
+            
+            var fixedCount = 0;
+            for (int i = 0; i < Config.Tabs.Count; i++)
+            {
+                var tab = Config.Tabs[i];
+                if (tab is DMTab dmTab && dmTab.PopOut)
+                {
+                    Plugin.Log.Info($"FixDMTabPopOutSettings: Fixing PopOut for DMTab '{dmTab.Name}' (was PopOut={dmTab.PopOut})");
+                    dmTab.PopOut = false; // Set to false so it appears in DM Section Window
+                    fixedCount++;
+                }
+            }
+            
+            if (fixedCount > 0)
+            {
+                Plugin.Log.Info($"FixDMTabPopOutSettings: Fixed PopOut setting for {fixedCount} DMTabs");
+                SaveConfig();
+                
+                // Force refresh of DM Section Window
+                if (Config.DMSectionPoppedOut && DMSectionWindow != null)
+                {
+                    Plugin.Log.Info("FixDMTabPopOutSettings: Forcing DM Section Window refresh");
+                    DMSectionWindow.IsOpen = true;
+                }
+            }
+            else
+            {
+                Plugin.Log.Info("FixDMTabPopOutSettings: No DMTabs needed PopOut fixing");
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"FixDMTabPopOutSettings: Error fixing PopOut settings: {ex.Message}");
         }
     }
     
@@ -310,11 +559,19 @@ public sealed class Plugin : IDalamudPlugin
     }
     
     /// <summary>
-    /// Performs the actual tab conversion on the main thread.
+    /// Performs the actual tab conversion on the main thread. 
     /// </summary>
     private void PerformTabConversion()
     {
         Plugin.Log.Info($"PerformTabConversion: Starting with {Config.Tabs.Count} total tabs");
+        
+        // Safety check: Don't convert if we already have too many DM tabs
+        var existingDMTabCount = Config.Tabs.Count(t => t is DMTab);
+        if (existingDMTabCount > 5)
+        {
+            Plugin.Log.Warning($"PerformTabConversion: Already have {existingDMTabCount} DM tabs, skipping conversion to prevent spam");
+            return;
+        }
         
         // First, let's log all tabs and their types
         for (int i = 0; i < Config.Tabs.Count; i++)
@@ -328,8 +585,10 @@ public sealed class Plugin : IDalamudPlugin
         }
         
         var tabsToReplace = new List<(int index, DMTab dmTab)>();
+        var maxConversions = 3; // Limit conversions per session
+        var conversionsPerformed = 0;
         
-        for (int i = 0; i < Config.Tabs.Count; i++)
+        for (int i = 0; i < Config.Tabs.Count && conversionsPerformed < maxConversions; i++)
         {
             var tab = Config.Tabs[i];
             
@@ -390,7 +649,7 @@ public sealed class Plugin : IDalamudPlugin
                             {
                                 using var existingMessages = tab.Messages.GetReadOnly(1000); // 1 second timeout
                                 var filteredMessages = new List<Message>();
-                                
+                                 
                                 // Only copy messages that are related to this specific player
                                 foreach (var message in existingMessages)
                                 {
@@ -445,6 +704,7 @@ public sealed class Plugin : IDalamudPlugin
                         }
                         
                         tabsToReplace.Add((i, dmTab));
+                        conversionsPerformed++;
                     }
                     else
                     {
@@ -501,6 +761,9 @@ public sealed class Plugin : IDalamudPlugin
             // Debug log the final tab state
             DebugLogTabState();
             
+            // Fix PopOut settings for all DMTabs to ensure they appear in DM Section Window
+            FixDMTabPopOutSettings();
+            
             // Force refresh of DM Section Window if it exists
             try
             {
@@ -518,6 +781,9 @@ public sealed class Plugin : IDalamudPlugin
         else
         {
             Plugin.Log.Info("PerformTabConversion: No tabs needed conversion");
+            
+            // Even if no conversion happened, fix existing DMTab PopOut settings
+            FixDMTabPopOutSettings();
         }
     }
     
@@ -530,6 +796,26 @@ public sealed class Plugin : IDalamudPlugin
     {
         Plugin.Log.Info($"IsLikelyDMTabByPattern: Analyzing tab '{tab.Name}'");
         
+        // SPECIAL CASE: If the tab name contains "@", it's definitely a DM tab (PlayerName@WorldName format)
+        if (tab.Name.Contains('@'))
+        {
+            Plugin.Log.Info($"IsLikelyDMTabByPattern: Tab '{tab.Name}' contains '@' - definitely a DM tab");
+            return true;
+        }
+        
+        // BLACKLIST: Never convert these tabs regardless of content
+        var blacklistedTabs = new[] { 
+            "General", "Battle", "Event", "Say", "Shout", "Tell", "Party", "Alliance", 
+            "FC", "LS", "CWLS", "Novice Network", "Custom", "Geral", "Chats", "Fight", 
+            "MB" // Removed "Ruyu Hayer" from blacklist
+        };
+        
+        if (blacklistedTabs.Any(blacklisted => tab.Name.Equals(blacklisted, StringComparison.OrdinalIgnoreCase)))
+        {
+            Plugin.Log.Info($"IsLikelyDMTabByPattern: Tab '{tab.Name}' is blacklisted, skipping conversion");
+            return false;
+        }
+        
         // Log all chat codes for this tab
         Plugin.Log.Info($"IsLikelyDMTabByPattern: Tab '{tab.Name}' has {tab.ChatCodes.Count} chat codes:");
         foreach (var chatCode in tab.ChatCodes)
@@ -538,66 +824,65 @@ public sealed class Plugin : IDalamudPlugin
         }
         
         // Check if the name doesn't match common tab names
-        var commonTabNames = new[] { "General", "Battle", "Event", "Say", "Shout", "Tell", "Party", "Alliance", "FC", "LS", "CWLS", "Novice Network", "Custom", "Geral", "Chats", "Fight", "MB", "Harumi Aoi", "Hanekawa Kett" };
-        var isNotCommonTabName = !commonTabNames.Any(common => tab.Name.Contains(common, StringComparison.OrdinalIgnoreCase));
+        var isNotCommonTabName = !blacklistedTabs.Any(common => tab.Name.Contains(common, StringComparison.OrdinalIgnoreCase));
         
         Plugin.Log.Info($"IsLikelyDMTabByPattern: Tab '{tab.Name}' is not common tab name: {isNotCommonTabName}");
         
         // Check if the name looks like a player name (contains letters and possibly spaces, but not special symbols)
+        // Allow @ symbol for world names like "PlayerName@WorldName"
         var looksLikePlayerName = !string.IsNullOrEmpty(tab.Name) && 
-                                 tab.Name.All(c => char.IsLetter(c) || char.IsWhiteSpace(c) || c == '\'' || c == '-') &&
-                                 tab.Name.Any(char.IsLetter);
+                                 tab.Name.All(c => char.IsLetter(c) || char.IsWhiteSpace(c) || c == '\'' || c == '-' || c == '@') &&
+                                 tab.Name.Any(char.IsLetter) &&
+                                 tab.Name.Length >= 3 && tab.Name.Length <= 30; // Allow longer names for "Name@World" format
         
         Plugin.Log.Info($"IsLikelyDMTabByPattern: Tab '{tab.Name}' looks like player name: {looksLikePlayerName}");
         
-        // For debugging, let's also check if this tab has messages and what types they are
+        // CONSERVATIVE APPROACH: Only convert if we have strong evidence
         try
         {
             using var messages = tab.Messages.GetReadOnly(100); // 100ms timeout
             Plugin.Log.Info($"IsLikelyDMTabByPattern: Tab '{tab.Name}' has {messages.Count} messages");
             
-            // IMPROVED APPROACH: Check if it has tell-related chat codes or content
+            // Must have tell-related chat codes
             var hasTellCodes = tab.ChatCodes.ContainsKey(ChatType.TellIncoming) || 
                               tab.ChatCodes.ContainsKey(ChatType.TellOutgoing);
             
-            var hasTellContent = false;
-            var hasOnlyTellContent = true;
+            // Must have tell content and ONLY tell content (very strict)
             var tellMessageCount = 0;
             var totalMessageCount = messages.Count;
+            var hasOnlyTellContent = totalMessageCount > 0; // Start with true if there are messages
             
-            // Check if the tab has any tell messages and if it has ONLY tell messages
             foreach (var message in messages)
             {
                 if (message.Code.Type == ChatType.TellIncoming || message.Code.Type == ChatType.TellOutgoing)
                 {
-                    hasTellContent = true;
                     tellMessageCount++;
                 }
                 else
                 {
-                    hasOnlyTellContent = false;
+                    hasOnlyTellContent = false; // Found non-tell message
                 }
             }
             
             Plugin.Log.Info($"IsLikelyDMTabByPattern: Tab '{tab.Name}' has tell codes: {hasTellCodes}");
-            Plugin.Log.Info($"IsLikelyDMTabByPattern: Tab '{tab.Name}' has tell content: {hasTellContent} ({tellMessageCount}/{totalMessageCount} messages)");
+            Plugin.Log.Info($"IsLikelyDMTabByPattern: Tab '{tab.Name}' has {tellMessageCount}/{totalMessageCount} tell messages");
             Plugin.Log.Info($"IsLikelyDMTabByPattern: Tab '{tab.Name}' has only tell content: {hasOnlyTellContent}");
             
-            // MAIN CRITERIA: 
+            // VERY STRICT CRITERIA: 
             // 1. Must look like a player name
-            // 2. Must not be a common tab name
-            // 3. Must have tell-related content (either codes or messages)
-            // 4. If it has messages, they should be predominantly or exclusively tells
-            var hasTellRelatedContent = hasTellCodes || hasTellContent;
-            var isPredominantlyTells = totalMessageCount == 0 || (tellMessageCount > 0 && (double)tellMessageCount / totalMessageCount >= 0.8);
+            // 2. Must not be blacklisted
+            // 3. Must have tell codes OR (have messages AND all messages are tells)
+            // 4. Must have at least some tell content
+            var hasStrongTellEvidence = hasTellCodes || (totalMessageCount > 0 && hasOnlyTellContent && tellMessageCount > 0);
+            var hasMinimumTellContent = tellMessageCount >= 1; // At least 1 tell message
             
-            var result = isNotCommonTabName && looksLikePlayerName && hasTellRelatedContent && isPredominantlyTells;
+            var result = isNotCommonTabName && looksLikePlayerName && hasStrongTellEvidence && hasMinimumTellContent;
             
             Plugin.Log.Info($"IsLikelyDMTabByPattern: Tab '{tab.Name}' analysis:");
             Plugin.Log.Info($"  - isNotCommonTabName: {isNotCommonTabName}");
             Plugin.Log.Info($"  - looksLikePlayerName: {looksLikePlayerName}");
-            Plugin.Log.Info($"  - hasTellRelatedContent: {hasTellRelatedContent}");
-            Plugin.Log.Info($"  - isPredominantlyTells: {isPredominantlyTells}");
+            Plugin.Log.Info($"  - hasStrongTellEvidence: {hasStrongTellEvidence}");
+            Plugin.Log.Info($"  - hasMinimumTellContent: {hasMinimumTellContent}");
             Plugin.Log.Info($"  - final result: {result}");
             
             return result;
@@ -628,7 +913,7 @@ public sealed class Plugin : IDalamudPlugin
     
     /// <summary>
     /// Tries to create a DMPlayer from a tab's information by looking up previous tell messages
-    /// to find the correct world ID for the player.
+    /// to find the correct world ID and ContentId for the player.
     /// </summary>
     private DMPlayer? TryCreateDMPlayerFromTab(Tab tab)
     {
@@ -637,8 +922,48 @@ public sealed class Plugin : IDalamudPlugin
             
         try
         {
-            // First, try to find the player's world ID from previous tell messages in the database
-            var worldId = FindPlayerWorldFromDatabase(tab.Name);
+            // SPECIAL CASE: If tab name contains "@", extract player name and world name directly
+            if (tab.Name.Contains('@'))
+            {
+                var parts = tab.Name.Split('@');
+                if (parts.Length == 2)
+                {
+                    var playerName = parts[0].Trim();
+                    var worldName = parts[1].Trim();
+                    
+                    Plugin.Log.Info($"TryCreateDMPlayerFromTab: Extracting from '@' format - Player: '{playerName}', World: '{worldName}'");
+                    
+                    var extractedWorldId = FindWorldIdByName(worldName);
+                    if (extractedWorldId != null)
+                    {
+                        Plugin.Log.Info($"TryCreateDMPlayerFromTab: Successfully created DMPlayer from '@' format: {playerName}@{worldName} (world {extractedWorldId})");
+                        return new DMPlayer(playerName, extractedWorldId.Value, 0);
+                    }
+                    else
+                    {
+                        Plugin.Log.Warning($"TryCreateDMPlayerFromTab: Could not find world ID for '{worldName}', using fallback");
+                        // Fall through to database lookup with just the player name
+                    }
+                }
+            }
+            
+            // Extract just the player name (remove world if present)
+            var nameToSearch = tab.Name;
+            if (nameToSearch.Contains('@'))
+            {
+                nameToSearch = nameToSearch.Split('@')[0].Trim();
+            }
+            
+            // PRIORITY 1: Try to find the player using ContentId from database (most reliable)
+            var dmPlayerFromContentId = FindPlayerFromDatabaseByContentId(nameToSearch);
+            if (dmPlayerFromContentId != null)
+            {
+                Plugin.Log.Info($"Found player '{nameToSearch}' using ContentId: {dmPlayerFromContentId.DisplayName} (ContentId: {dmPlayerFromContentId.ContentId})");
+                return dmPlayerFromContentId;
+            }
+            
+            // PRIORITY 2: Fallback to world ID lookup from database
+            var worldId = FindPlayerWorldFromDatabase(nameToSearch);
             
             // SPECIAL CASE: Manual overrides for known players with wrong database data
             var manualOverrides = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -648,12 +973,12 @@ public sealed class Plugin : IDalamudPlugin
                 // { "PlayerName", "WorldName" },
             };
             
-            if (manualOverrides.TryGetValue(tab.Name, out var overrideWorldName))
+            if (manualOverrides.TryGetValue(nameToSearch, out var overrideWorldName))
             {
                 var overrideWorldId = FindWorldIdByName(overrideWorldName);
                 if (overrideWorldId != null)
                 {
-                    Plugin.Log.Info($"Manual override: Setting {tab.Name} to {overrideWorldName} (world {overrideWorldId}) instead of detected world {worldId}");
+                    Plugin.Log.Info($"Manual override: Setting {nameToSearch} to {overrideWorldName} (world {overrideWorldId}) instead of detected world {worldId}");
                     worldId = overrideWorldId;
                 }
                 else
@@ -667,19 +992,20 @@ public sealed class Plugin : IDalamudPlugin
                 // Fallback: Use current player's world as last resort
                 if (ClientState.LocalPlayer?.HomeWorld == null)
                 {
-                    Plugin.Log.Warning($"Cannot create DMPlayer for '{tab.Name}' - no valid player or world available");
+                    Plugin.Log.Warning($"Cannot create DMPlayer for '{nameToSearch}' - no valid player or world available");
                     return null;
                 }
                 
                 worldId = ClientState.LocalPlayer.HomeWorld.RowId;
-                Plugin.Log.Warning($"Could not find world for '{tab.Name}' in message history, using current player's world {worldId} as fallback");
+                Plugin.Log.Warning($"Could not find world for '{nameToSearch}' in message history, using current player's world {worldId} as fallback");
             }
             else
             {
-                Plugin.Log.Info($"Found world {worldId} for '{tab.Name}' from message history");
+                Plugin.Log.Info($"Found world {worldId} for '{nameToSearch}' from message history");
             }
             
-            return new DMPlayer(tab.Name, worldId.Value);
+            // Create DMPlayer without ContentId (will be 0) - ContentId will be populated when new messages arrive
+            return new DMPlayer(nameToSearch, worldId.Value, 0);
         }
         catch (Exception ex)
         {
@@ -704,7 +1030,7 @@ public sealed class Plugin : IDalamudPlugin
             
             var messageCount = 0;
             var tellMessageCount = 0;
-            var incomingWorlds = new List<(uint worldId, DateTimeOffset date, string source)>();
+            var incomingWorlds = new List<(uint worldId, DateTimeOffset date, string source, ulong contentId)>();
             var outgoingWorlds = new List<(uint worldId, DateTimeOffset date, string source)>();
             
             // Look for tell messages (incoming or outgoing) that involve this player
@@ -727,8 +1053,8 @@ public sealed class Plugin : IDalamudPlugin
                         var worldId = ExtractWorldIdFromContentId(message.ContentId);
                         if (worldId != null)
                         {
-                            incomingWorlds.Add((worldId.Value, message.Date, "incoming tell"));
-                            Plugin.Log.Debug($"Found world {worldId} for player '{playerName}' from incoming tell dated {message.Date}");
+                            incomingWorlds.Add((worldId.Value, message.Date, "incoming tell", message.ContentId));
+                            Plugin.Log.Debug($"Found world {worldId} for player '{playerName}' from incoming tell dated {message.Date} (ContentId: {message.ContentId})");
                         }
                     }
                 }
@@ -771,7 +1097,7 @@ public sealed class Plugin : IDalamudPlugin
             if (incomingWorlds.Count > 0)
             {
                 var mostRecentIncoming = incomingWorlds.OrderByDescending(w => w.date).First();
-                Plugin.Log.Info($"Selected world {mostRecentIncoming.worldId} for player '{playerName}' from {mostRecentIncoming.source} (most recent incoming: {mostRecentIncoming.date})");
+                Plugin.Log.Info($"Selected world {mostRecentIncoming.worldId} for player '{playerName}' from {mostRecentIncoming.source} (most recent incoming: {mostRecentIncoming.date}, ContentId: {mostRecentIncoming.contentId})");
                 return mostRecentIncoming.worldId;
             }
             
@@ -789,6 +1115,47 @@ public sealed class Plugin : IDalamudPlugin
         catch (Exception ex)
         {
             Plugin.Log.Error($"Error searching database for player '{playerName}': {ex.Message}");
+            return null;
+        }
+    }
+    
+    /// <summary>
+    /// Finds a DMPlayer from the database using ContentId for more reliable identification.
+    /// </summary>
+    private DMPlayer? FindPlayerFromDatabaseByContentId(string playerName)
+    {
+        try
+        {
+            Plugin.Log.Debug($"Searching for player '{playerName}' using ContentId from database");
+            
+            // Get recent messages (last 30 days should be enough)
+            var since = DateTimeOffset.UtcNow.AddDays(-30);
+            using var messageEnumerator = MessageManager.Store.GetMostRecentMessages(since: since, count: 20000);
+            
+            // Look for the most recent incoming tell from this player
+            foreach (var message in messageEnumerator)
+            {
+                if (message.Code.Type != ChatType.TellIncoming)
+                    continue;
+                
+                var senderName = ExtractPlayerNameFromChunks(message.Sender);
+                if (!string.IsNullOrEmpty(senderName) && senderName.Equals(playerName, StringComparison.OrdinalIgnoreCase))
+                {
+                    var worldId = ExtractWorldIdFromContentId(message.ContentId);
+                    if (worldId != null && message.ContentId != 0)
+                    {
+                        Plugin.Log.Info($"Found player '{playerName}' with ContentId {message.ContentId} and world {worldId}");
+                        return new DMPlayer(playerName, worldId.Value, message.ContentId);
+                    }
+                }
+            }
+            
+            Plugin.Log.Debug($"No ContentId-based match found for player '{playerName}'");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Error searching for player '{playerName}' by ContentId: {ex.Message}");
             return null;
         }
     }
@@ -904,6 +1271,7 @@ public sealed class Plugin : IDalamudPlugin
         if (_needsDMTabConversion)
         {
             _needsDMTabConversion = false;
+            Plugin.Log.Info("FrameworkUpdate: Triggering DM tab conversion");
             FixDeserializedDMTabs();
         }
 

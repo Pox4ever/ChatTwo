@@ -116,14 +116,17 @@ internal class DMTab : Tab
     /// <param name="unread">Whether to mark as unread</param>
     internal new void AddMessage(Message message, bool unread = true)
     {
+        // Convert outgoing message format for consistency
+        var processedMessage = ConvertOutgoingMessageFormat(message);
+        
         // Call base implementation to add to tab's message list
-        Messages.AddPrune(message, MessageManager.MessageDisplayLimit);
+        Messages.AddPrune(processedMessage, MessageManager.MessageDisplayLimit);
         
         // Also add to DM history if it's a tell from/to this player
-        if (message.IsRelatedToPlayer(Player))
+        if (processedMessage.IsRelatedToPlayer(Player))
         {
-            var isIncoming = message.Code.Type == ChatType.TellIncoming;
-            History?.AddMessage(message, isIncoming);
+            var isIncoming = processedMessage.Code.Type == ChatType.TellIncoming;
+            History?.AddMessage(processedMessage, isIncoming);
             
             // For DM tabs, we sync the base tab unread count with the DM history unread count
             // Only count incoming messages as unread for the tab
@@ -131,7 +134,7 @@ internal class DMTab : Tab
             {
                 Unread += 1;
                 // Access the static Plugin.Config directly since it's available
-                if (message.Matches(Plugin.Config.InactivityHideChannels!, 
+                if (processedMessage.Matches(Plugin.Config.InactivityHideChannels!, 
                                   Plugin.Config.InactivityHideExtraChatAll, 
                                   Plugin.Config.InactivityHideExtraChatChannels))
                     LastActivity = Environment.TickCount64;
@@ -142,7 +145,7 @@ internal class DMTab : Tab
             // For non-DM messages (shouldn't happen in DM tabs, but just in case)
             Unread += 1;
             // Access the static Plugin.Config directly since it's available
-            if (message.Matches(Plugin.Config.InactivityHideChannels!, 
+            if (processedMessage.Matches(Plugin.Config.InactivityHideChannels!, 
                               Plugin.Config.InactivityHideExtraChatAll, 
                               Plugin.Config.InactivityHideExtraChatChannels))
                 LastActivity = Environment.TickCount64;
@@ -243,32 +246,16 @@ internal class DMTab : Tab
                 return;
             }
             
-            // Check if we already have messages to avoid duplication
-            var currentCount = 0;
-            try
-            {
-                using var existingMessages = Messages.GetReadOnly(3);
-                currentCount = existingMessages.Count;
-            }
-            catch (TimeoutException)
-            {
-                // Timeout is fine, proceed with load
-            }
-            
-            if (currentCount > 0)
-            {
-                Plugin.Log.Debug($"DMTab already has {currentCount} messages, skipping history load for {Player.DisplayName}");
-                return; // Already have messages, skip history load
-            }
-
             var historyCount = Math.Max(1, Math.Min(200, Plugin.Config.DMMessageHistoryCount));
-            Plugin.Log.Debug($"Loading {historyCount} messages from history for {Player.DisplayName}");
+            Plugin.Log.Info($"Loading up to {historyCount} messages from history for {Player.DisplayName}");
             
             // Load messages from the persistent MessageStore database
             var loadedMessages = new List<Message>();
             
             // Query the MessageStore for tell messages with a reasonable search limit
-            var searchLimit = Math.Max(1000, historyCount * 10); // Search more messages to find enough relevant ones
+            var searchLimit = Math.Max(2000, historyCount * 20); // Increased search limit to find more messages
+            Plugin.Log.Debug($"Searching through {searchLimit} recent messages for {Player.DisplayName}");
+            
             using (var messageEnumerator = dmManager.PluginInstance.MessageManager.Store.GetMostRecentMessages(count: searchLimit))
             {
                 foreach (var message in messageEnumerator)
@@ -277,6 +264,7 @@ internal class DMTab : Tab
                     if (message.IsTell() && message.IsRelatedToPlayer(Player))
                     {
                         loadedMessages.Add(message);
+                        Plugin.Log.Debug($"Found matching message: {message.Code.Type} - {string.Join("", message.Sender.Select(c => c.StringValue()))}");
                         
                         // Stop after finding enough messages
                         if (loadedMessages.Count >= historyCount)
@@ -284,6 +272,8 @@ internal class DMTab : Tab
                     }
                 }
             }
+            
+            Plugin.Log.Info($"Found {loadedMessages.Count} matching messages for {Player.DisplayName}");
             
             // Take the most recent messages as configured
             var recentMessages = loadedMessages
@@ -294,7 +284,10 @@ internal class DMTab : Tab
             
             if (recentMessages.Length > 0)
             {
-                Plugin.Log.Info($"Loaded {recentMessages.Length} message(s) from history for {Player.DisplayName}");
+                Plugin.Log.Info($"Loading {recentMessages.Length} message(s) from history for {Player.DisplayName}");
+                
+                // Clear existing messages first to avoid duplication
+                Messages.Clear();
                 
                 foreach (var message in recentMessages)
                 {
@@ -305,10 +298,36 @@ internal class DMTab : Tab
                     // Also add to in-memory history for consistency
                     History.AddMessage(processedMessage, isIncoming: processedMessage.IsFromPlayer(Player));
                 }
+                
+                Plugin.Log.Info($"Successfully loaded {recentMessages.Length} messages for {Player.DisplayName}");
             }
             else
             {
-                Plugin.Log.Debug($"No message history found for DM tab with {Player.DisplayName}");
+                Plugin.Log.Warning($"No message history found for DM tab with {Player.DisplayName}");
+                
+                // Debug: Let's see what messages we can find for debugging
+                Plugin.Log.Debug($"Debug: Searching for any messages containing '{Player.Name}' in sender or content...");
+                var debugCount = 0;
+                using (var debugEnumerator = dmManager.PluginInstance.MessageManager.Store.GetMostRecentMessages(count: 500))
+                {
+                    foreach (var message in debugEnumerator)
+                    {
+                        if (message.IsTell())
+                        {
+                            var senderText = string.Join("", message.Sender.Select(c => c.StringValue()));
+                            var contentText = string.Join("", message.Content.Select(c => c.StringValue()));
+                            
+                            if (senderText.Contains(Player.Name, StringComparison.OrdinalIgnoreCase) || 
+                                contentText.Contains(Player.Name, StringComparison.OrdinalIgnoreCase))
+                            {
+                                Plugin.Log.Debug($"Debug found tell with '{Player.Name}': {message.Code.Type} - Sender: '{senderText}' - Content: '{contentText}'");
+                                debugCount++;
+                                if (debugCount >= 5) break; // Limit debug output
+                            }
+                        }
+                    }
+                }
+                Plugin.Log.Debug($"Debug: Found {debugCount} messages containing '{Player.Name}'");
             }
         }
         catch (Exception ex)
@@ -341,15 +360,20 @@ internal class DMTab : Tab
             if (originalSender.StartsWith("You:"))
                 return message;
             
-            // If it's the full format (>> PlayerName🌐World:), convert to "You:"
-            if (originalSender.StartsWith(">> ") && originalSender.Contains(": "))
+            // Convert ANY outgoing message format to "You:" for consistency
+            // This handles formats like:
+            // - ">> PlayerName:"
+            // - ">> PlayerName🌐World:"
+            // - ">> PlayerName@World:"
+            // - Any other outgoing format
+            if (originalSender.Contains(">>") || originalSender.Contains(Player.Name))
             {
-                Plugin.Log.Debug($"Converting old outgoing message sender from '{originalSender}' to 'You: '");
+                Plugin.Log.Debug($"Converting outgoing message sender from '{originalSender}' to 'You:'");
                 
                 // Create new sender chunks with "You:" format
                 var newSenderChunks = new List<Chunk>
                 {
-                    new TextChunk(ChunkSource.Sender, null, "You: ")
+                    new TextChunk(ChunkSource.Sender, null, "You:")
                 };
                 
                 // Keep the original content chunks
@@ -414,5 +438,37 @@ internal class DMTab : Tab
         };
         
         return cloned;
+    }
+
+    /// <summary>
+    /// Debug method to manually reload message history, ignoring existing messages.
+    /// </summary>
+    public void DebugReloadHistory()
+    {
+        try
+        {
+            Plugin.Log.Info($"DebugReloadHistory: Manually reloading history for {Player.DisplayName}");
+            
+            // Clear existing messages
+            Messages.Clear();
+            
+            // Force reload history
+            LoadMessageHistoryFromStore();
+            
+            Plugin.Log.Info($"DebugReloadHistory: Completed reload for {Player.DisplayName}");
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"DebugReloadHistory: Error reloading history for {Player.DisplayName}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Gets a normalized version of the player name for comparison purposes.
+    /// This helps identify duplicate tabs for the same player.
+    /// </summary>
+    public string GetNormalizedPlayerName()
+    {
+        return MessageExtensions.NormalizePlayerName(Player.Name);
     }
 }

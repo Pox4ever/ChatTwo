@@ -79,7 +79,11 @@ public sealed class DMSectionWindow : Window
         // Only show when DM section is popped out and there are DM tabs
         var shouldShow = Plugin.Config.DMSectionPoppedOut && HasDMTabs();
         
-        Plugin.Log.Debug($"DMSectionWindow DrawConditions: DMSectionPoppedOut={Plugin.Config.DMSectionPoppedOut}, HasDMTabs={HasDMTabs()}, ShouldShow={shouldShow}");
+        // Only log occasionally to avoid spam
+        if (Environment.TickCount64 % 5000 < 100) // Log roughly every 5 seconds
+        {
+            Plugin.Log.Debug($"DMSectionWindow DrawConditions: DMSectionPoppedOut={Plugin.Config.DMSectionPoppedOut}, HasDMTabs={HasDMTabs()}, ShouldShow={shouldShow}");
+        }
         
         return shouldShow;
     }
@@ -597,18 +601,22 @@ public sealed class DMSectionWindow : Window
     private bool HasDMTabs()
     {
         var dmTabs = Plugin.Config.Tabs.Where(tab => !tab.PopOut && tab is DMTab).ToList();
-        Plugin.Log.Debug($"HasDMTabs: Found {dmTabs.Count} DM tabs that are not popped out");
-        foreach (var tab in dmTabs)
+        
+        // Only log occasionally to avoid spam
+        if (Environment.TickCount64 % 5000 < 100) // Log roughly every 5 seconds
         {
-            if (tab is DMTab dmTab)
+            Plugin.Log.Debug($"HasDMTabs: Found {dmTabs.Count} DM tabs that are not popped out");
+            foreach (var tab in dmTabs)
             {
-                Plugin.Log.Debug($"HasDMTabs: DM tab for {dmTab.Player.DisplayName}, PopOut={tab.PopOut}");
+                if (tab is DMTab dmTab)
+                {
+                    Plugin.Log.Debug($"HasDMTabs: DM tab for {dmTab.Player.DisplayName}, PopOut={tab.PopOut}");
+                }
             }
+            Plugin.Log.Debug($"HasDMTabs: Returning {dmTabs.Any()}");
         }
         
-        var result = dmTabs.Any();
-        Plugin.Log.Debug($"HasDMTabs: Returning {result}");
-        return result;
+        return dmTabs.Any();
     }
     
     /// <summary>

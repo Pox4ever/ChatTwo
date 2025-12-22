@@ -3,22 +3,24 @@ using System;
 namespace ChatTwo.DM;
 
 /// <summary>
-/// Represents a player for DM conversations, identified by name and home world.
+/// Represents a player for DM conversations, identified by ContentId (primary) and name/world (fallback).
 /// </summary>
 [Serializable]
 internal class DMPlayer : IEquatable<DMPlayer>
 {
     public string Name { get; set; } = string.Empty;
     public uint HomeWorld { get; set; }
+    public ulong ContentId { get; set; } // Primary identifier
 
     public DMPlayer()
     {
     }
 
-    public DMPlayer(string name, uint homeWorld)
+    public DMPlayer(string name, uint homeWorld, ulong contentId = 0)
     {
         Name = name ?? throw new ArgumentNullException(nameof(name));
         HomeWorld = homeWorld;
+        ContentId = contentId;
     }
 
     /// <summary>
@@ -76,18 +78,24 @@ internal class DMPlayer : IEquatable<DMPlayer>
         if (other is null) return false;
         if (ReferenceEquals(this, other)) return true;
         
-        // Compare names (case-insensitive)
+        // PRIORITY 1: If both players have valid ContentIds, use ContentId for comparison
+        if (ContentId != 0 && other.ContentId != 0)
+        {
+            return ContentId == other.ContentId;
+        }
+        
+        // PRIORITY 2: If one or both have no ContentId, fall back to name comparison
         var nameMatch = string.Equals(Name, other.Name, StringComparison.OrdinalIgnoreCase);
         
         // If names don't match, players are different
         if (!nameMatch) return false;
         
-        // If either player has world 0 (unknown/unavailable), only compare names
+        // PRIORITY 3: If either player has world 0 (unknown/unavailable), only compare names
         // This handles cases where world information couldn't be extracted
         if (HomeWorld == 0 || other.HomeWorld == 0)
             return true;
         
-        // Both players have valid world information, compare both name and world
+        // PRIORITY 4: Both players have valid world information, compare both name and world
         return HomeWorld == other.HomeWorld;
     }
 
@@ -98,9 +106,13 @@ internal class DMPlayer : IEquatable<DMPlayer>
 
     public override int GetHashCode()
     {
-        // Only use name for hash code to be consistent with Equals logic
-        // This ensures that players with the same name but different worlds
-        // (especially when one has world 0) can be found in dictionaries
+        // Use ContentId for hash if available, otherwise use name
+        if (ContentId != 0)
+        {
+            return ContentId.GetHashCode();
+        }
+        
+        // Fallback to name-based hash for consistency with Equals logic
         return Name?.ToLowerInvariant()?.GetHashCode() ?? 0;
     }
 

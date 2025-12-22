@@ -41,8 +41,8 @@ internal static class MessageExtensions
     /// <summary>
     /// Checks if a message is related to the specified player (either from or to them).
     /// </summary>
-    /// <param name="message">The message to check</param>
-    /// <param name="player">The player to check against</param>
+    /// <param name="message">The message to check</param> 
+    /// <param name="player">The player to check against</param> 
     /// <returns>True if the message is from or to the specified player, false otherwise</returns>
     public static bool IsRelatedToPlayer(this Message message, DMPlayer player)
     {
@@ -163,7 +163,7 @@ internal static class MessageExtensions
 
         try
         {
-            Plugin.Log.Debug($"ExtractPlayerFromMessage: Processing {message.Code.Type} message");
+            Plugin.Log.Debug($"ExtractPlayerFromMessage: Processing {message.Code.Type} message with ContentId={message.ContentId}");
             
             // For incoming tells, extract from sender
             if (message.Code.Type == ChatType.TellIncoming)
@@ -180,9 +180,11 @@ internal static class MessageExtensions
                 
                 if (!string.IsNullOrEmpty(senderName))
                 {
-                    // Use current player's world as fallback
-                    var world = GetCurrentPlayerWorld();
-                    Plugin.Log.Debug($"ExtractPlayerFromMessage: Current player world: {world}");
+                    // Try to extract world from ContentId first (most reliable)
+                    var worldFromContentId = ExtractWorldIdFromContentId(message.ContentId);
+                    var world = worldFromContentId ?? GetCurrentPlayerWorld();
+                    
+                    Plugin.Log.Debug($"ExtractPlayerFromMessage: World from ContentId: {worldFromContentId}, fallback world: {world}");
                     
                     // Check if the sender name contains world information (PlayerName@WorldName)
                     if (senderName.Contains('@'))
@@ -192,22 +194,25 @@ internal static class MessageExtensions
                         {
                             var playerName = parts[0].Trim();
                             var worldName = parts[1].Trim();
-                            Plugin.Log.Debug($"ExtractPlayerFromMessage: Found world info - player: '{playerName}', world: '{worldName}'");
+                            Plugin.Log.Debug($"ExtractPlayerFromMessage: Found world info in name - player: '{playerName}', world: '{worldName}'");
                             
-                            // Try to find world by name
-                            var worldId = GetWorldIdByName(worldName);
-                            if (worldId != 0)
+                            // Try to find world by name, but prefer ContentId-derived world if available
+                            if (worldFromContentId == null)
                             {
-                                world = worldId;
-                                Plugin.Log.Debug($"ExtractPlayerFromMessage: Resolved world '{worldName}' to ID {worldId}");
+                                var worldId = GetWorldIdByName(worldName);
+                                if (worldId != 0)
+                                {
+                                    world = worldId;
+                                    Plugin.Log.Debug($"ExtractPlayerFromMessage: Resolved world '{worldName}' to ID {worldId}");
+                                }
                             }
                             
                             senderName = playerName;
                         }
                     }
                     
-                    Plugin.Log.Debug($"ExtractPlayerFromMessage: Successfully extracted player '{senderName}' on world {world}");
-                    return new DMPlayer(senderName, world);
+                    Plugin.Log.Debug($"ExtractPlayerFromMessage: Successfully extracted player '{senderName}' on world {world} with ContentId {message.ContentId}");
+                    return new DMPlayer(senderName, world, message.ContentId);
                 }
                 else
                 {
@@ -231,6 +236,25 @@ internal static class MessageExtensions
     }
 
     /// <summary>
+    /// Extracts the world ID from a ContentId.
+    /// ContentId format: [WorldId (16 bits)][PlayerId (48 bits)]
+    /// </summary>
+    private static uint? ExtractWorldIdFromContentId(ulong contentId)
+    {
+        if (contentId == 0)
+            return null;
+        
+        // Extract the world ID from the upper 16 bits of the ContentId
+        var worldId = (uint)((contentId >> 48) & 0xFFFF);
+        
+        // Validate that it's a reasonable world ID (should be > 0 and < 10000)
+        if (worldId > 0 && worldId < 10000)
+            return worldId;
+        
+        return null;
+    }
+
+    /// <summary>
     /// Cleans up a player name by removing common formatting artifacts.
     /// </summary>
     /// <param name="playerName">The raw player name</param>
@@ -246,6 +270,21 @@ internal static class MessageExtensions
         // Remove tell formatting characters (>>, <<, etc.)
         cleaned = cleaned.Replace(">>", "").Replace("<<", "").Replace(">", "").Replace("<", "");
         
+        // Remove game-generated decorative emojis that appear around player names in tells
+        // Common FFXIV decorative emojis: 🌸 (cherry blossom), 🌐 (globe for world), etc.
+        cleaned = System.Text.RegularExpressions.Regex.Replace(cleaned, @"[🌐🌸🌺🌻🌷🌹💮🏵️⚘🌼🌙⭐✨💫🔥❄️💧🌊⚡🌟💎]", "");
+        
+        // Remove cross-world indicators that appear in FFXIV
+        // Examples: "PlayerNameCrossWorldJenova", "PlayerNameCrossWorld", etc.
+        cleaned = System.Text.RegularExpressions.Regex.Replace(cleaned, @"CrossWorld\w*", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        
+        // Remove any @ symbol and everything after it (world name)
+        var atIndex = cleaned.IndexOf('@');
+        if (atIndex >= 0)
+        {
+            cleaned = cleaned.Substring(0, atIndex);
+        }
+        
         // Remove any leading/trailing brackets, quotes, or other formatting
         cleaned = cleaned.Trim('[', ']', '"', '\'', ' ', '\t', '\n', '\r');
         
@@ -253,6 +292,17 @@ internal static class MessageExtensions
         cleaned = cleaned.Trim();
         
         return cleaned;
+    }
+
+    /// <summary>
+    /// Normalizes a player name for comparison purposes by applying the same cleaning logic.
+    /// This helps identify duplicate players with different name formats.
+    /// </summary>
+    /// <param name="playerName">The player name to normalize</param>
+    /// <returns>Normalized player name</returns>
+    public static string NormalizePlayerName(string playerName)
+    {
+        return CleanPlayerName(playerName);
     }
 
     /// <summary>
