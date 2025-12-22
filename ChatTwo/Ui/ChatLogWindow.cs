@@ -1560,8 +1560,26 @@ public sealed class ChatLogWindow : Window
         using (ImRaii.PushStyle(ImGuiStyleVar.ItemSpacing, Vector2.Zero))
             DrawMessages(tab, handler, false);
 
-        if (switchedTab || ImGui.GetScrollY() >= ImGui.GetScrollMaxY())
+        // Simple and direct approach: Check mouse wheel input to prevent auto-scroll
+        var io = ImGui.GetIO();
+        var userScrollingUp = io.MouseWheel > 0.0f; // Positive wheel = scrolling up
+        var userScrollingDown = io.MouseWheel < 0.0f; // Negative wheel = scrolling down
+        
+        var currentScrollY = ImGui.GetScrollY();
+        var maxScrollY = ImGui.GetScrollMaxY();
+        var isAtBottom = currentScrollY >= maxScrollY - 1.0f;
+        
+        // CRITICAL FIX: Never auto-scroll if user is actively scrolling up with mouse wheel
+        if (userScrollingUp)
+        {
+            return; // Exit early, don't auto-scroll at all
+        }
+        
+        // Only auto-scroll if we switched tabs OR if we're at bottom (and user isn't scrolling up)
+        if (switchedTab || isAtBottom)
+        {
             ImGui.SetScrollHereY(1f);
+        }
 
         // Popup handling moved to parent window level to avoid child window conflicts
     }
@@ -1589,8 +1607,26 @@ public sealed class ChatLogWindow : Window
             {
                 // Custom styles can have cellPadding that go above 4, which GetScrollY isn't respecting
                 var cellPaddingOffset = !compact && oldCellPadding.Y > 4f ? oldCellPadding.Y - 4f : 0f;
-                if (switchedTab || ImGui.GetScrollY() + cellPaddingOffset >= ImGui.GetScrollMaxY())
+                
+                // Simple and direct approach: Check mouse wheel input to prevent auto-scroll
+                var io = ImGui.GetIO();
+                var userScrollingUp = io.MouseWheel > 0.0f; // Positive wheel = scrolling up
+                
+                var currentScrollY = ImGui.GetScrollY();
+                var maxScrollY = ImGui.GetScrollMaxY();
+                var isAtBottom = currentScrollY + cellPaddingOffset >= maxScrollY - 1.0f;
+                
+                // CRITICAL FIX: Never auto-scroll if user is actively scrolling up with mouse wheel
+                if (userScrollingUp)
+                {
+                    return; // Exit early, don't auto-scroll at all
+                }
+                
+                // Only auto-scroll if we switched tabs OR if we're at bottom (and user isn't scrolling up)
+                if (switchedTab || isAtBottom)
+                {
                     ImGui.SetScrollHereY(1f);
+                }
 
                 // Popup handling moved to parent window level to avoid child window conflicts
             }

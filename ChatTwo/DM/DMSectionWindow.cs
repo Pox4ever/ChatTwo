@@ -22,6 +22,9 @@ public sealed class DMSectionWindow : Window
     
     // Independent input field for DM section window
     private string _dmSectionInput = string.Empty;
+    
+    // Independent tab tracking for DM section (don't interfere with main window)
+    private int _activeDMTabIndex = -1;
 
     public DMSectionWindow(Plugin plugin, ChatLogWindow chatLogWindow) 
         : base($"Direct Messages###dm-section-window")
@@ -77,15 +80,7 @@ public sealed class DMSectionWindow : Window
     public override bool DrawConditions()
     {
         // Only show when DM section is popped out and there are DM tabs
-        var shouldShow = Plugin.Config.DMSectionPoppedOut && HasDMTabs();
-        
-        // Only log occasionally to avoid spam
-        if (Environment.TickCount64 % 5000 < 100) // Log roughly every 5 seconds
-        {
-            Plugin.Log.Debug($"DMSectionWindow DrawConditions: DMSectionPoppedOut={Plugin.Config.DMSectionPoppedOut}, HasDMTabs={HasDMTabs()}, ShouldShow={shouldShow}");
-        }
-        
-        return shouldShow;
+        return Plugin.Config.DMSectionPoppedOut && HasDMTabs();
     }
 
     public override void OnClose()
@@ -205,8 +200,9 @@ public sealed class DMSectionWindow : Window
                     activeTabIndex = tabIndex;
                     activeTab = dmTab;
                     
-                    // Set this as the active tab
-                    Plugin.LastTab = tabIndex;
+                    // CRITICAL FIX: Use our own tab tracking instead of interfering with Plugin.LastTab
+                    // This was causing the main chat window to think tabs were constantly switching
+                    _activeDMTabIndex = tabIndex;
                     
                     // Clear unread for this DM tab
                     dmTab.Unread = 0;
@@ -219,10 +215,16 @@ public sealed class DMSectionWindow : Window
         }
 
         // Draw the content of the active tab (buttons are now integrated into the content layout)
-        var finalActiveTab = dmTabs.FirstOrDefault(x => Plugin.LastTab == x.index);
+        var finalActiveTab = dmTabs.FirstOrDefault(x => _activeDMTabIndex == x.index);
         if (finalActiveTab != null)
         {
             DrawDMTabContentWithoutButtons((DMTab)finalActiveTab.tab);
+        }
+        else if (dmTabs.Count > 0)
+        {
+            // If no active tab is set, default to the first one
+            _activeDMTabIndex = dmTabs[0].index;
+            DrawDMTabContentWithoutButtons((DMTab)dmTabs[0].tab);
         }
     }
 
@@ -601,21 +603,6 @@ public sealed class DMSectionWindow : Window
     private bool HasDMTabs()
     {
         var dmTabs = Plugin.Config.Tabs.Where(tab => !tab.PopOut && tab is DMTab).ToList();
-        
-        // Only log occasionally to avoid spam
-        if (Environment.TickCount64 % 5000 < 100) // Log roughly every 5 seconds
-        {
-            Plugin.Log.Debug($"HasDMTabs: Found {dmTabs.Count} DM tabs that are not popped out");
-            foreach (var tab in dmTabs)
-            {
-                if (tab is DMTab dmTab)
-                {
-                    Plugin.Log.Debug($"HasDMTabs: DM tab for {dmTab.Player.DisplayName}, PopOut={tab.PopOut}");
-                }
-            }
-            Plugin.Log.Debug($"HasDMTabs: Returning {dmTabs.Any()}");
-        }
-        
         return dmTabs.Any();
     }
     

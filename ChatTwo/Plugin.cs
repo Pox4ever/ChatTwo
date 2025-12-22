@@ -756,6 +756,13 @@ public sealed class Plugin : IDalamudPlugin
                 Plugin.Log.Info($"Converted tab at index {index}: '{dmTab.Name}' -> DMTab for {dmTab.Player.DisplayName} (PopOut={dmTab.PopOut})");
             }
             
+            // CRITICAL FIX: Reset LastTab to prevent scroll issues
+            // When tabs are replaced, the LastTab index may become invalid or point to a different tab,
+            // causing hasTabSwitched to be true inappropriately and triggering unwanted auto-scroll
+            var oldLastTab = LastTab;
+            LastTab = -1; // Reset to force proper tab detection on next frame
+            Plugin.Log.Info($"PerformTabConversion: Reset LastTab from {oldLastTab} to -1 to prevent scroll issues");
+            
             SaveConfig(); // Save the corrected configuration
             
             // Debug log the final tab state
