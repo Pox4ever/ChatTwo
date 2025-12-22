@@ -268,6 +268,10 @@ internal class MessageManager : IAsyncDisposable
         var currentMatches = Plugin.CurrentTab.Matches(message);
         foreach (var tab in Plugin.Config.Tabs)
         {
+            // Skip DM tabs - they are handled by DMMessageRouter to prevent duplication
+            if (tab is ChatTwo.DM.DMTab)
+                continue;
+
             var unread = !(tab.UnreadMode == UnreadMode.Unseen && Plugin.CurrentTab != tab && currentMatches);
 
             if (tab.Matches(message))

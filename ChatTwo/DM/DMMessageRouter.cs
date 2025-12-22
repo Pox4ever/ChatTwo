@@ -135,25 +135,29 @@ internal class DMMessageRouter
     /// <param name="message">The outgoing tell message</param>
     private void ProcessOutgoingTell(Message message)
     {
-        // For outgoing tells, try to extract the target from the message content
-        // If we don't have a recent receiver, try to parse it from the tell command
-        DMPlayer? targetPlayer = _recentReceiver;
+        // CRITICAL FIX: Always try to extract target from current message first
+        // Don't rely on cached _recentReceiver as it causes cross-contamination
+        DMPlayer? targetPlayer = TryExtractTargetFromOutgoingTell(message);
         
         if (targetPlayer == null)
         {
-            targetPlayer = TryExtractTargetFromOutgoingTell(message);
-            
-            if (targetPlayer != null)
-            {
-                // Set as recent receiver for error routing
-                _recentReceiver = targetPlayer;
-            }
-            else
-            {
-                Plugin.Log.Warning("ProcessOutgoingTell: Could not extract target from outgoing tell");
-                return;
-            }
+            // Fallback to recent receiver only if extraction fails
+            targetPlayer = _recentReceiver;
+            Plugin.Log.Debug($"ProcessOutgoingTell: Could not extract target from message, using recent receiver: {targetPlayer?.DisplayName ?? "null"}");
         }
+        else
+        {
+            Plugin.Log.Debug($"ProcessOutgoingTell: Successfully extracted target from message: {targetPlayer.DisplayName}");
+        }
+        
+        if (targetPlayer == null)
+        {
+            Plugin.Log.Warning("ProcessOutgoingTell: Could not determine target player for outgoing tell");
+            return;
+        }
+        
+        // Update recent receiver for error message routing
+        _recentReceiver = targetPlayer;
 
         try
         {
@@ -162,11 +166,14 @@ internal class DMMessageRouter
             // Create a properly formatted outgoing message
             var modifiedMessage = CreateOutgoingTellMessage(message);
             
+            Plugin.Log.Debug($"ProcessOutgoingTell: Routing message to {targetPlayer.DisplayName}");
+            
             // Route to open DM tabs if they exist
             var dmTab = dmManager.GetDMTab(targetPlayer);
             if (dmTab != null)
             {
                 dmTab.AddMessage(modifiedMessage, unread: false);
+                Plugin.Log.Debug($"ProcessOutgoingTell: Routed message to DM tab for {targetPlayer.DisplayName}");
             }
 
             // Route to open DM windows if they exist

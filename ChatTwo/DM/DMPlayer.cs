@@ -106,13 +106,9 @@ internal class DMPlayer : IEquatable<DMPlayer>
 
     public override int GetHashCode()
     {
-        // Use ContentId for hash if available, otherwise use name
-        if (ContentId != 0)
-        {
-            return ContentId.GetHashCode();
-        }
-        
-        // Fallback to name-based hash for consistency with Equals logic
+        // CRITICAL FIX: Always use name-based hash for consistency
+        // ContentId can change between outgoing and incoming messages, causing hash mismatches
+        // This ensures that players with the same name always hash to the same value
         return Name?.ToLowerInvariant()?.GetHashCode() ?? 0;
     }
 

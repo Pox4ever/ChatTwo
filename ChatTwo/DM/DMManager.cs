@@ -260,6 +260,7 @@ internal class DMManager
 
     /// <summary>
     /// Gets the DM window for a specific player if it exists.
+    /// Uses enhanced matching logic to handle ContentId and world mismatches.
     /// </summary>
     /// <param name="player">The player to get the DM window for</param>
     /// <returns>The DMWindow instance or null if not found</returns>
@@ -268,8 +269,35 @@ internal class DMManager
         if (player == null)
             return null;
 
-        _openWindows.TryGetValue(player, out var dmWindow);
-        return dmWindow;
+        // First try direct lookup
+        if (_openWindows.TryGetValue(player, out var dmWindow))
+            return dmWindow;
+
+        // If direct lookup fails and we have a ContentId, try to find by ContentId
+        if (player.ContentId != 0)
+        {
+            foreach (var kvp in _openWindows)
+            {
+                var existingPlayer = kvp.Key;
+                var existingWindow = kvp.Value;
+                
+                // Match by ContentId if both have it
+                if (existingPlayer.ContentId != 0 && existingPlayer.ContentId == player.ContentId)
+                {
+                    Plugin.Log.Debug($"GetDMWindow: Found existing window by ContentId match: {existingPlayer.DisplayName} -> {player.DisplayName}");
+                    return existingWindow;
+                }
+                
+                // Match by name if ContentId not available but names match
+                if (string.Equals(existingPlayer.Name, player.Name, StringComparison.OrdinalIgnoreCase))
+                {
+                    Plugin.Log.Debug($"GetDMWindow: Found existing window by name match: {existingPlayer.DisplayName} -> {player.DisplayName}");
+                    return existingWindow;
+                }
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -840,6 +868,7 @@ internal class DMManager
 
     /// <summary>
     /// Gets the DM tab for a specific player if it exists.
+    /// Uses enhanced matching logic to handle ContentId and world mismatches.
     /// </summary>
     /// <param name="player">The player to get the DM tab for</param>
     /// <returns>The DMTab instance or null if not found</returns>
@@ -848,8 +877,35 @@ internal class DMManager
         if (player == null)
             return null;
 
-        _openTabs.TryGetValue(player, out var dmTab);
-        return dmTab;
+        // First try direct lookup
+        if (_openTabs.TryGetValue(player, out var dmTab))
+            return dmTab;
+
+        // If direct lookup fails and we have a ContentId, try to find by ContentId
+        if (player.ContentId != 0)
+        {
+            foreach (var kvp in _openTabs)
+            {
+                var existingPlayer = kvp.Key;
+                var existingTab = kvp.Value;
+                
+                // Match by ContentId if both have it
+                if (existingPlayer.ContentId != 0 && existingPlayer.ContentId == player.ContentId)
+                {
+                    Plugin.Log.Debug($"GetDMTab: Found existing tab by ContentId match: {existingPlayer.DisplayName} -> {player.DisplayName}");
+                    return existingTab;
+                }
+                
+                // Match by name if ContentId not available but names match
+                if (string.Equals(existingPlayer.Name, player.Name, StringComparison.OrdinalIgnoreCase))
+                {
+                    Plugin.Log.Debug($"GetDMTab: Found existing tab by name match: {existingPlayer.DisplayName} -> {player.DisplayName}");
+                    return existingTab;
+                }
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
