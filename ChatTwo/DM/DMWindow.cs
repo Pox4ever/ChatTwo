@@ -282,6 +282,11 @@ internal class DMWindow : Window
     {
         FrameTime = Environment.TickCount64;
         
+        // Use the same hiding logic as the main chat window for consistency
+        // This includes checks for cutscenes, user hide, battle, and login state
+        if (ChatLogWindow.IsHidden)
+            return false;
+        
         // Only check window closure state occasionally to reduce overhead
         if ((FrameTime % 200) == 0) // Check every ~200ms instead of every frame
         {

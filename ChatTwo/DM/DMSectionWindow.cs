@@ -79,6 +79,11 @@ public sealed class DMSectionWindow : Window
 
     public override bool DrawConditions()
     {
+        // Use the same hiding logic as the main chat window for consistency
+        // This includes checks for cutscenes, user hide, battle, and login state
+        if (ChatLogWindow.IsHidden)
+            return false;
+            
         // Only show when DM section is popped out and there are DM tabs
         return Plugin.Config.DMSectionPoppedOut && HasDMTabs();
     }
