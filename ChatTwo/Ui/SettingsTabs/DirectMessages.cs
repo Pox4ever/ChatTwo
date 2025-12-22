@@ -204,5 +204,52 @@ internal sealed class DirectMessages(Configuration mutable) : ISettingsTab
         Mutable.SaveDMMessages = saveDMMessages;
         ImGuiUtil.HelpText("Save tell messages to the database for persistent history. Uses the same database as regular chat messages.");
         ImGui.Spacing();
+
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        // Color Settings
+        ImGui.TextUnformatted("Color Settings");
+        ImGui.Spacing();
+
+        var useDMCustomColors = Mutable.UseDMCustomColors;
+        ImGui.Checkbox("Use custom DM colors", ref useDMCustomColors);
+        Mutable.UseDMCustomColors = useDMCustomColors;
+        ImGuiUtil.HelpText("Use custom colors for DM messages instead of default chat colors. When disabled, uses standard FFXIV tell colors.");
+        ImGui.Spacing();
+
+        if (useDMCustomColors)
+        {
+            ImGui.Indent();
+            
+            // Incoming message color
+            var incomingColor = ColourUtil.RgbaToVector4(Mutable.DMIncomingColor);
+            if (ImGui.ColorEdit4("Incoming message color", ref incomingColor, ImGuiColorEditFlags.NoInputs | ImGuiColorEditFlags.AlphaPreviewHalf))
+            {
+                Mutable.DMIncomingColor = ColourUtil.Vector4ToRgba(incomingColor);
+            }
+            ImGuiUtil.HelpText("Color for messages received from other players in DM windows and tabs.");
+            ImGui.Spacing();
+
+            // Outgoing message color
+            var outgoingColor = ColourUtil.RgbaToVector4(Mutable.DMOutgoingColor);
+            if (ImGui.ColorEdit4("Outgoing message color", ref outgoingColor, ImGuiColorEditFlags.NoInputs | ImGuiColorEditFlags.AlphaPreviewHalf))
+            {
+                Mutable.DMOutgoingColor = ColourUtil.Vector4ToRgba(outgoingColor);
+            }
+            ImGuiUtil.HelpText("Color for messages you send in DM windows and tabs (\"You:\" messages).");
+            ImGui.Spacing();
+
+            // Error message color
+            var errorColor = ColourUtil.RgbaToVector4(Mutable.DMErrorColor);
+            if (ImGui.ColorEdit4("Error message color", ref errorColor, ImGuiColorEditFlags.NoInputs | ImGuiColorEditFlags.AlphaPreviewHalf))
+            {
+                Mutable.DMErrorColor = ColourUtil.Vector4ToRgba(errorColor);
+            }
+            ImGuiUtil.HelpText("Color for error messages related to tells (e.g., \"Message could not be sent\").");
+            
+            ImGui.Unindent();
+            ImGui.Spacing();
+        }
     }
 }

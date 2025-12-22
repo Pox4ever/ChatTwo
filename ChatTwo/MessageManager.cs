@@ -132,7 +132,17 @@ internal class MessageManager : IAsyncDisposable
     internal void ClearAllTabs()
     {
         foreach (var tab in Plugin.Config.Tabs)
+        {
+            // Don't clear DM tabs - they manage their own messages and clearing them
+            // causes message content to be lost or mixed up during settings save
+            if (tab is ChatTwo.DM.DMTab)
+            {
+                Plugin.Log.Debug($"ClearAllTabs: Skipping DM tab {tab.Name}");
+                continue;
+            }
+            
             tab.Clear();
+        }
     }
 
     internal void FilterAllTabs()
@@ -145,7 +155,13 @@ internal class MessageManager : IAsyncDisposable
 
         // We store the pending messages to be added to the chat log in a
         // temporary list, and apply them all at once after filtering.
-        var pendingTabs = Plugin.Config.Tabs.Select(tab => (tab, new List<Message>())).ToList();
+        // Skip DM tabs - they manage their own messages and filtering them here
+        // causes message content to be mixed up between different DM tabs
+        var pendingTabs = Plugin.Config.Tabs
+            .Where(tab => !(tab is ChatTwo.DM.DMTab))
+            .Select(tab => (tab, new List<Message>()))
+            .ToList();
+            
         foreach (var message in messages)
             foreach (var (_, pendingMessages) in pendingTabs.Where(ptab => ptab.Item1.Matches(message)))
                 pendingMessages.Add(message);

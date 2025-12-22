@@ -81,9 +81,12 @@ internal class DMMessageRouter
             return;
         }
 
+        // Apply custom colors if enabled
+        var coloredMessage = ApplyDMColors(message, isIncoming: true);
+
         // Route the message to DM history
         var dmManager = DMManager.Instance;
-        dmManager.RouteIncomingTell(message);
+        dmManager.RouteIncomingTell(coloredMessage);
 
         // Check if we should auto-open a DM for new tells
         var hasExistingDM = dmManager.HasOpenDMTab(player) || dmManager.HasOpenDMWindow(player);
@@ -117,7 +120,7 @@ internal class DMMessageRouter
         var dmTab = dmManager.GetDMTab(player);
         if (dmTab != null)
         {
-            dmTab.AddMessage(message, unread: true);
+            dmTab.AddMessage(coloredMessage, unread: true);
         }
 
         // Route to open DM windows if they exist
@@ -125,7 +128,7 @@ internal class DMMessageRouter
         if (dmWindow2 != null)
         {
             // Add the message to the DM window's internal DMTab
-            dmWindow2.DMTab.AddMessage(message, unread: true);
+            dmWindow2.DMTab.AddMessage(coloredMessage, unread: true);
         }
     }
 
@@ -239,10 +242,10 @@ internal class DMMessageRouter
     }
 
     /// <summary>
-    /// Creates a properly formatted outgoing tell message with sender name.
+    /// Creates a properly formatted outgoing tell message with sender name and custom colors.
     /// </summary>
     /// <param name="originalMessage">The original outgoing tell message</param>
-    /// <returns>Modified message with proper sender formatting</returns>
+    /// <returns>Modified message with proper sender formatting and colors</returns>
     private Message CreateOutgoingTellMessage(Message originalMessage)
     {
         try
@@ -256,48 +259,43 @@ internal class DMMessageRouter
             var messageContent = string.Join("", originalMessage.Content.Select(c => c.StringValue()));
             
             // Create a simpler sender format for DM windows
-            // Option 1: Use "You: " for a cleaner look in DM context
             var simpleSender = "You: ";
-            
-            // Option 2: If you prefer your character name, uncomment this section:
-            /*
-            var simpleSender = "You: "; // Default fallback
-            try
-            {
-                // Try to get character name from the original sender
-                var originalSenderText = string.Join("", originalMessage.Sender.Select(c => c.StringValue()));
-                if (originalSenderText.StartsWith(">> ") && originalSenderText.Contains(": "))
-                {
-                    var nameStart = 3; // Skip ">> "
-                    var nameEnd = originalSenderText.IndexOf(": ");
-                    if (nameEnd > nameStart)
-                    {
-                        var fullName = originalSenderText.Substring(nameStart, nameEnd - nameStart);
-                        // Remove world info if present (everything after CrossWorld character)
-                        var crossWorldIndex = fullName.IndexOf((char)SeIconChar.CrossWorld);
-                        var characterName = crossWorldIndex > 0 ? fullName.Substring(0, crossWorldIndex) : fullName;
-                        simpleSender = $"{characterName}: ";
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Plugin.Log.Debug($"Failed to extract character name, using 'You': {ex.Message}");
-            }
-            */
             
             Plugin.Log.Debug($"CreateOutgoingTellMessage: Using simple sender format '{simpleSender}', messageContent='{messageContent}'");
             
-            // Create simple sender chunks for DM context
-            var senderChunks = new List<Chunk>
+            // Create sender chunks with custom color if enabled
+            var senderChunks = new List<Chunk>();
+            if (Plugin.Config.UseDMCustomColors)
             {
-                new TextChunk(ChunkSource.Sender, null, simpleSender)
-            };
+                senderChunks.Add(new TextChunk(ChunkSource.Sender, null, simpleSender)
+                {
+                    Foreground = Plugin.Config.DMOutgoingColor
+                });
+            }
+            else
+            {
+                senderChunks.Add(new TextChunk(ChunkSource.Sender, null, simpleSender)
+                {
+                    FallbackColour = ChatType.TellOutgoing
+                });
+            }
             
-            var contentChunks = new List<Chunk>
+            // Create content chunks with custom color if enabled
+            var contentChunks = new List<Chunk>();
+            if (Plugin.Config.UseDMCustomColors)
             {
-                new TextChunk(ChunkSource.Content, null, messageContent)
-            };
+                contentChunks.Add(new TextChunk(ChunkSource.Content, null, messageContent)
+                {
+                    Foreground = Plugin.Config.DMOutgoingColor
+                });
+            }
+            else
+            {
+                contentChunks.Add(new TextChunk(ChunkSource.Content, null, messageContent)
+                {
+                    FallbackColour = ChatType.TellOutgoing
+                });
+            }
             
             return new Message(
                 originalMessage.Receiver,
@@ -366,6 +364,9 @@ internal class DMMessageRouter
         var targetPlayer = _recentReceiver;
         _recentReceiver = null; // Clear after processing
 
+        // Apply custom colors to error message if enabled
+        var coloredMessage = ApplyDMColors(message, isIncoming: false, isError: true);
+
         // Route the error to the appropriate DM interface
         var dmManager = DMManager.Instance;
         
@@ -373,7 +374,7 @@ internal class DMMessageRouter
         var dmTab = dmManager.GetDMTab(targetPlayer);
         if (dmTab != null)
         {
-            dmTab.AddMessage(message, unread: false);
+            dmTab.AddMessage(coloredMessage, unread: false);
         }
 
         // Add to DM window if it exists (via its internal DMTab)
@@ -381,14 +382,14 @@ internal class DMMessageRouter
         if (dmWindow != null)
         {
             // Add the error message to the DM window's internal DMTab
-            dmWindow.DMTab.AddMessage(message, unread: false);
+            dmWindow.DMTab.AddMessage(coloredMessage, unread: false);
         }
 
         // Also add to DM history for persistence
         var history = dmManager.GetHistory(targetPlayer);
         if (history != null)
         {
-            history.AddMessage(message, isIncoming: false);
+            history.AddMessage(coloredMessage, isIncoming: false);
         }
     }
 
@@ -561,5 +562,82 @@ internal class DMMessageRouter
         // For now, always show tells in main chat (default behavior)
         // This will be enhanced when configuration options are implemented
         return Plugin.Config.ShowTellsInMainChat;
+    }
+
+    /// <summary>
+    /// Applies custom DM colors to a message if enabled in configuration.
+    /// </summary>
+    /// <param name="message">The message to apply colors to</param>
+    /// <param name="isIncoming">Whether this is an incoming message (true) or outgoing (false)</param>
+    /// <param name="isError">Whether this is an error message</param>
+    /// <returns>A new message with colors applied, or the original message if custom colors are disabled</returns>
+    private Message ApplyDMColors(Message message, bool isIncoming, bool isError = false)
+    {
+        if (!Plugin.Config.UseDMCustomColors)
+            return message;
+
+        try
+        {
+            // Determine the color to use
+            uint color;
+            if (isError)
+            {
+                color = Plugin.Config.DMErrorColor;
+            }
+            else if (isIncoming)
+            {
+                color = Plugin.Config.DMIncomingColor;
+            }
+            else
+            {
+                color = Plugin.Config.DMOutgoingColor;
+            }
+
+            // Create new sender chunks with custom color
+            var newSenderChunks = message.Sender.Select(chunk =>
+            {
+                if (chunk is TextChunk textChunk)
+                {
+                    return new TextChunk(textChunk.Source, textChunk.Link, textChunk.Content)
+                    {
+                        Foreground = color,
+                        Glow = textChunk.Glow,
+                        Italic = textChunk.Italic
+                    };
+                }
+                return chunk;
+            }).ToList();
+
+            // Create new content chunks with custom color
+            var newContentChunks = message.Content.Select(chunk =>
+            {
+                if (chunk is TextChunk textChunk)
+                {
+                    return new TextChunk(textChunk.Source, textChunk.Link, textChunk.Content)
+                    {
+                        Foreground = color,
+                        Glow = textChunk.Glow,
+                        Italic = textChunk.Italic
+                    };
+                }
+                return chunk;
+            }).ToList();
+
+            return new Message(
+                message.Receiver,
+                message.ContentId,
+                message.AccountId,
+                message.Code,
+                newSenderChunks,
+                newContentChunks,
+                message.SenderSource,
+                message.ContentSource
+            );
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to apply DM colors: {ex.Message}");
+            return message; // Return original if coloring fails
+        }
     }
 }

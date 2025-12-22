@@ -198,12 +198,26 @@ internal class Configuration : IPluginConfiguration
     public bool LoadDMMessageHistory { get; set; } = true; // Whether to load previous DM messages when opening a DM tab/window
     public int DMMessageHistoryCount { get; set; } = 50; // Number of previous messages to load (1-200)
     public bool SaveDMMessages { get; set; } = true; // Whether to save DM messages to database (uses existing DatabaseBattleMessages logic)
+    
+    // DM Color Settings
+    public bool UseDMCustomColors { get; set; } = true; // Whether to use custom colors for DM messages
+    public uint DMIncomingColor { get; set; } = 0xFFFFB3FF; // Default FFXIV tell color (pinkish)
+    public uint DMOutgoingColor { get; set; } = 0xFFFFB3FF; // Same color for consistency
+    public uint DMErrorColor { get; set; } = 0xFF4444FF; // Red color for error messages
 
     internal void UpdateFrom(Configuration other, bool backToOriginal)
     {
         if (backToOriginal)
-            foreach (var tab in Tabs.Where(t => t.PopOut))
+        {
+            // Only reset PopOut for regular tabs, not DM tabs
+            // DM tabs in the DM Section Window should stay there
+            var tabsToReset = Tabs.Where(t => t.PopOut && !(t is ChatTwo.DM.DMTab)).ToList();
+            
+            foreach (var tab in tabsToReset)
+            {
                 tab.PopOut = false;
+            }
+        }
 
         HideChat = other.HideChat;
         HideDuringCutscenes = other.HideDuringCutscenes;
@@ -273,7 +287,27 @@ internal class Configuration : IPluginConfiguration
         TooltipOffset = other.TooltipOffset;
         WindowAlpha = other.WindowAlpha;
         ChatColours = other.ChatColours.ToDictionary(entry => entry.Key, entry => entry.Value);
+        
+        // CRITICAL: This line overwrites all our tab modifications!
+        // We need to preserve DM tab states from the current config
+        var preservedDMTabs = Tabs.OfType<ChatTwo.DM.DMTab>().ToList();
+        
         Tabs = other.Tabs.Select(t => t.Clone()).ToList();
+        
+        // Re-add preserved DM tabs or update their states
+        foreach (var preservedDMTab in preservedDMTabs)
+        {
+            // Find if this DM tab exists in the new tabs list
+            var existingDMTab = Tabs.OfType<ChatTwo.DM.DMTab>()
+                .FirstOrDefault(t => t.Player.Name == preservedDMTab.Player.Name && 
+                                   t.Player.HomeWorld == preservedDMTab.Player.HomeWorld);
+            
+            if (existingDMTab != null)
+            {
+                // Update the existing DM tab to preserve its PopOut state
+                existingDMTab.PopOut = preservedDMTab.PopOut;
+            }
+        }
         OverrideStyle = other.OverrideStyle;
         ChosenStyle = other.ChosenStyle;
         
@@ -332,6 +366,12 @@ internal class Configuration : IPluginConfiguration
         LoadDMMessageHistory = other.LoadDMMessageHistory;
         DMMessageHistoryCount = other.DMMessageHistoryCount;
         SaveDMMessages = other.SaveDMMessages;
+        
+        // DM Color Settings
+        UseDMCustomColors = other.UseDMCustomColors;
+        DMIncomingColor = other.DMIncomingColor;
+        DMOutgoingColor = other.DMOutgoingColor;
+        DMErrorColor = other.DMErrorColor;
     }
 }
 
@@ -414,7 +454,7 @@ public class Tab
 
     internal void Clear() => Messages.Clear();
 
-    internal Tab Clone()
+    internal virtual Tab Clone()
     {
         return new Tab
         {

@@ -20,7 +20,7 @@ internal class DMTab : Tab
     /// Indicates this is a DM tab for identification purposes.
     /// </summary>
     public bool IsDMTab => true;
-
+ 
     public DMTab()
     {
     }
@@ -29,7 +29,7 @@ internal class DMTab : Tab
     {
         Player = player ?? throw new ArgumentNullException(nameof(player));
         
-        // Try to get history from DMManager, but don't fail if not initialized
+        // Try to get history from DMManager, but don't fail if not initialized 
         try
         {
             History = DMManager.Instance.GetOrCreateHistory(player);
@@ -54,7 +54,7 @@ internal class DMTab : Tab
         // Configure DM-specific settings
         DisplayTimestamp = true;
         UnreadMode = UnreadMode.Unseen;
-        UnhideOnActivity = true;
+        UnhideOnActivity = true; 
         
         // CRITICAL: Ensure input is enabled for DM tabs
         InputDisabled = false;
@@ -337,7 +337,7 @@ internal class DMTab : Tab
     }
 
     /// <summary>
-    /// Converts old outgoing messages to use "You:" format for consistency in DM tabs.
+    /// Converts old outgoing messages to use "You:" format for consistency in DM tabs and applies custom colors.
     /// </summary>
     /// <param name="message">The message to potentially convert</param>
     /// <returns>The converted message or original if no conversion needed</returns>
@@ -345,20 +345,23 @@ internal class DMTab : Tab
     {
         try
         {
+            // Apply colors to all messages first
+            var coloredMessage = ApplyDMColorsToMessage(message);
+            
             // Only convert outgoing tell messages
-            if (message.Code.Type != ChatType.TellOutgoing)
-                return message;
+            if (coloredMessage.Code.Type != ChatType.TellOutgoing)
+                return coloredMessage;
             
             // Check if this is an outgoing message (from us to the target player)
-            if (!message.IsToPlayer(Player))
-                return message;
+            if (!coloredMessage.IsToPlayer(Player))
+                return coloredMessage;
             
             // Get the original sender text
-            var originalSender = string.Join("", message.Sender.Select(c => c.StringValue()));
+            var originalSender = string.Join("", coloredMessage.Sender.Select(c => c.StringValue()));
             
             // If it already uses "You:" format, no conversion needed
             if (originalSender.StartsWith("You:"))
-                return message;
+                return coloredMessage;
             
             // Convert ANY outgoing message format to "You:" for consistency
             // This handles formats like:
@@ -370,29 +373,40 @@ internal class DMTab : Tab
             {
                 Plugin.Log.Debug($"Converting outgoing message sender from '{originalSender}' to 'You:'");
                 
-                // Create new sender chunks with "You:" format
-                var newSenderChunks = new List<Chunk>
+                // Create new sender chunks with "You:" format and custom color if enabled
+                var newSenderChunks = new List<Chunk>();
+                if (Plugin.Config.UseDMCustomColors)
                 {
-                    new TextChunk(ChunkSource.Sender, null, "You:")
-                };
+                    newSenderChunks.Add(new TextChunk(ChunkSource.Sender, null, "You:")
+                    {
+                        Foreground = Plugin.Config.DMOutgoingColor
+                    });
+                }
+                else
+                {
+                    newSenderChunks.Add(new TextChunk(ChunkSource.Sender, null, "You:")
+                    {
+                        FallbackColour = ChatType.TellOutgoing
+                    });
+                }
                 
-                // Keep the original content chunks
-                var contentChunks = message.Content.ToList();
+                // Keep the original content chunks (already colored)
+                var contentChunks = coloredMessage.Content.ToList();
                 
                 return new Message(
-                    message.Receiver,
-                    message.ContentId,
-                    message.AccountId,
-                    message.Code,
+                    coloredMessage.Receiver,
+                    coloredMessage.ContentId,
+                    coloredMessage.AccountId,
+                    coloredMessage.Code,
                     newSenderChunks,
                     contentChunks,
-                    message.SenderSource,
-                    message.ContentSource
+                    coloredMessage.SenderSource,
+                    coloredMessage.ContentSource
                 );
             }
             
             // No conversion needed
-            return message;
+            return coloredMessage;
         }
         catch (Exception ex)
         {
@@ -405,7 +419,7 @@ internal class DMTab : Tab
     /// Creates a clone of this DMTab with the same configuration.
     /// </summary>
     /// <returns>A new DMTab instance with the same settings</returns>
-    public new DMTab Clone()
+    internal override Tab Clone()
     {
         var cloned = new DMTab(Player)
         {
@@ -436,6 +450,22 @@ internal class DMTab : Tab
             HideWhenInactive = HideWhenInactive,
             History = History
         };
+        
+        // CRITICAL: Copy the Messages from the original tab to preserve message content
+        // This prevents message content from being lost or mixed up during settings save
+        try
+        {
+            using var originalMessages = Messages.GetReadOnly();
+            foreach (var message in originalMessages)
+            {
+                cloned.Messages.AddPrune(message, MessageManager.MessageDisplayLimit);
+            }
+            Plugin.Log.Debug($"DMTab.Clone: Copied {originalMessages.Count} messages for {Player.DisplayName}");
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"DMTab.Clone: Failed to copy messages for {Player.DisplayName}: {ex.Message}");
+        }
         
         return cloned;
     }
@@ -470,5 +500,84 @@ internal class DMTab : Tab
     public string GetNormalizedPlayerName()
     {
         return MessageExtensions.NormalizePlayerName(Player.Name);
+    }
+
+    /// <summary>
+    /// Applies custom DM colors to a message if enabled in configuration.
+    /// </summary>
+    /// <param name="message">The message to apply colors to</param>
+    /// <returns>A new message with colors applied, or the original message if custom colors are disabled</returns>
+    private Message ApplyDMColorsToMessage(Message message)
+    {
+        if (!Plugin.Config.UseDMCustomColors)
+            return message;
+
+        try
+        {
+            // Determine if this is an incoming or outgoing message
+            bool isIncoming = message.Code.Type == ChatType.TellIncoming;
+            bool isError = message.Code.Type == ChatType.Error;
+            
+            // Determine the color to use
+            uint color;
+            if (isError)
+            {
+                color = Plugin.Config.DMErrorColor;
+            }
+            else if (isIncoming)
+            {
+                color = Plugin.Config.DMIncomingColor;
+            }
+            else
+            {
+                color = Plugin.Config.DMOutgoingColor;
+            }
+
+            // Create new sender chunks with custom color
+            var newSenderChunks = message.Sender.Select(chunk =>
+            {
+                if (chunk is TextChunk textChunk)
+                {
+                    return new TextChunk(textChunk.Source, textChunk.Link, textChunk.Content)
+                    {
+                        Foreground = color,
+                        Glow = textChunk.Glow,
+                        Italic = textChunk.Italic
+                    };
+                }
+                return chunk;
+            }).ToList();
+
+            // Create new content chunks with custom color
+            var newContentChunks = message.Content.Select(chunk =>
+            {
+                if (chunk is TextChunk textChunk)
+                {
+                    return new TextChunk(textChunk.Source, textChunk.Link, textChunk.Content)
+                    {
+                        Foreground = color,
+                        Glow = textChunk.Glow,
+                        Italic = textChunk.Italic
+                    };
+                }
+                return chunk;
+            }).ToList();
+
+            return new Message(
+                message.Receiver,
+                message.ContentId,
+                message.AccountId,
+                message.Code,
+                newSenderChunks,
+                newContentChunks,
+                message.SenderSource,
+                message.ContentSource
+            );
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to apply DM colors to message: {ex.Message}");
+            return message; // Return original if coloring fails
+        }
     }
 }

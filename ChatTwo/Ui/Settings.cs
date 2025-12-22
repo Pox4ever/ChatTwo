@@ -166,6 +166,7 @@ public sealed class SettingsWindow : Window
         // save after 60 frames have passed, which should hopefully not
         // commit any changes that cause a crash
         Plugin.DeferredSaveFrames = 60;
+        
         Plugin.MessageManager.ClearAllTabs();
         Plugin.MessageManager.FilterAllTabsAsync();
 
