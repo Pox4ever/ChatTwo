@@ -149,7 +149,8 @@ internal class Configuration : IPluginConfiguration
     public bool EmotePickerSearchEnabled = true;
     
     // DM Section Pop-out Settings
-    public bool DMSectionPoppedOut = false; // Whether the DM section is currently popped out
+    public bool DMSectionPoppedOut = true; // Whether the DM section is currently popped out
+    public bool ShowDMSectionCollapseButtons = true; // Whether to show collapse/expand buttons in DM section window
 
     // DM Management Settings
     public bool CloseDMsOnLogout { get; set; } = false;
@@ -296,6 +297,7 @@ internal class Configuration : IPluginConfiguration
         
         // DM Section Pop-out Settings
         DMSectionPoppedOut = other.DMSectionPoppedOut;
+        ShowDMSectionCollapseButtons = other.ShowDMSectionCollapseButtons;
         
         // DM Management Settings
         CloseDMsOnLogout = other.CloseDMsOnLogout;

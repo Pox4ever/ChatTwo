@@ -114,6 +114,16 @@ internal sealed class DirectMessages(Configuration mutable) : ISettingsTab
         ImGuiUtil.HelpText("Move all DM tabs to a separate window, leaving only regular chat tabs in the main window.");
         ImGui.Spacing();
 
+        // Show collapse buttons setting (only when DM section is popped out)
+        if (dmSectionPoppedOut)
+        {
+            var showCollapseButtons = Mutable.ShowDMSectionCollapseButtons;
+            ImGui.Checkbox("Show collapse/expand buttons", ref showCollapseButtons);
+            Mutable.ShowDMSectionCollapseButtons = showCollapseButtons;
+            ImGuiUtil.HelpText("Show collapse/expand buttons in the DM section window header, similar to the Party window.");
+            ImGui.Spacing();
+        }
+
         ImGui.Separator();
         ImGui.Spacing();
 

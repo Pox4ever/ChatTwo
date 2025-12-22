@@ -749,14 +749,19 @@ internal class DMManager
 
         try
         {
+            Plugin.Log.Debug($"OpenDMTab: Attempting to open DM tab for {player.DisplayName}");
+            
             // Check if tab already exists
             if (_openTabs.TryGetValue(player, out var existingTab))
             {
+                Plugin.Log.Debug($"OpenDMTab: Found existing tab for {player.DisplayName}, focusing it");
                 // Focus the existing tab
                 FocusDMTab(existingTab);
                 return existingTab;
             }
 
+            Plugin.Log.Debug($"OpenDMTab: Creating new DM tab for {player.DisplayName}");
+            
             // Create new DM tab
             var dmTab = new DMTab(player);
             
@@ -766,12 +771,36 @@ internal class DMManager
             
             // Add to open tabs tracking
             _openTabs.TryAdd(player, dmTab);
+            Plugin.Log.Debug($"OpenDMTab: Added {player.DisplayName} to open tabs tracking");
             
             // Add to the main configuration tabs list
             Plugin.Config.Tabs.Add(dmTab);
+            Plugin.Log.Debug($"OpenDMTab: Added {player.DisplayName} to configuration tabs list. Total tabs: {Plugin.Config.Tabs.Count}");
+            
+            // Save configuration to persist the new tab
+            _plugin.SaveConfig();
+            Plugin.Log.Debug($"OpenDMTab: Saved configuration");
+            
+            // Ensure the DM Section Window is visible if DM section is popped out
+            if (Plugin.Config.DMSectionPoppedOut)
+            {
+                Plugin.Log.Debug($"OpenDMTab: DM section is popped out, ensuring DMSectionWindow is visible");
+                var dmSectionWindow = _plugin.DMSectionWindow;
+                if (dmSectionWindow != null)
+                {
+                    // Make sure the window is open and will be drawn
+                    dmSectionWindow.IsOpen = true;
+                    Plugin.Log.Debug($"OpenDMTab: Set DMSectionWindow.IsOpen = true");
+                }
+                else
+                {
+                    Plugin.Log.Warning($"OpenDMTab: DMSectionWindow is null!");
+                }
+            }
             
             // Focus the new tab
             FocusDMTab(dmTab);
+            Plugin.Log.Debug($"OpenDMTab: Focused new DM tab for {player.DisplayName}");
             
             return dmTab;
         }

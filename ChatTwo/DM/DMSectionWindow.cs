@@ -48,8 +48,9 @@ public sealed class DMSectionWindow : Window
             Flags |= ImGuiWindowFlags.NoMove;
         if (!Plugin.Config.CanResize)
             Flags |= ImGuiWindowFlags.NoResize;
-        if (!Plugin.Config.ShowTitleBar)
-            Flags |= ImGuiWindowFlags.NoTitleBar;
+        
+        // Conditionally show title bar based on collapse buttons setting
+        UpdateTitleBarVisibility();
     }
 
     public override void PreDraw()
@@ -78,9 +79,47 @@ public sealed class DMSectionWindow : Window
         // Only show when DM section is popped out and there are DM tabs
         var shouldShow = Plugin.Config.DMSectionPoppedOut && HasDMTabs();
         
-        Plugin.Log.Debug($"DMSectionWindow DrawConditions: DMSectionPoppedOut={Plugin.Config.DMSectionPoppedOut}, HasDMTabs={HasDMTabs()}, ShouldShow={shouldShow}");
+        if (Plugin.Config.DMSectionPoppedOut || HasDMTabs())
+        {
+            Plugin.Log.Debug($"DMSectionWindow DrawConditions: DMSectionPoppedOut={Plugin.Config.DMSectionPoppedOut}, HasDMTabs={HasDMTabs()}, ShouldShow={shouldShow}");
+        }
         
         return shouldShow;
+    }
+
+    public override void OnClose()
+    {
+        // When the DM Section Window is closed via the native close button,
+        // we should just close the DM tabs but keep the setting enabled
+        // The user can disable the setting manually if they want to
+        Plugin.Log.Info("DMSectionWindow: Window closed via native close button, closing DM tabs but keeping setting enabled");
+        
+        // Close all DM tabs that were in the DM section window
+        // This ensures proper cleanup and prevents "Focus Existing DM" from showing
+        var dmTabsToClose = Plugin.Config.Tabs
+            .Where(tab => tab is DMTab dmTab && !dmTab.PopOut)
+            .Cast<DMTab>()
+            .ToList();
+            
+        Plugin.Log.Debug($"DMSectionWindow: Closing {dmTabsToClose.Count} DM tabs from section window");
+        
+        foreach (var dmTab in dmTabsToClose)
+        {
+            Plugin.Log.Debug($"DMSectionWindow: Closing DM tab for {dmTab.Player.DisplayName}");
+            DMManager.Instance.CloseDMTab(dmTab.Player);
+        }
+        
+        // Save the configuration (to persist the closed tabs)
+        Plugin.SaveConfig();
+        
+        // Clean up any stale references
+        DMManager.Instance.CleanupStaleReferences();
+        
+        // Note: We do NOT turn off Plugin.Config.DMSectionPoppedOut here
+        // The user can disable that setting manually if they want to
+        // This allows them to close the window temporarily and reopen it later
+        
+        base.OnClose();
     }
 
     public override void Draw()
@@ -114,6 +153,16 @@ public sealed class DMSectionWindow : Window
         using var tabHoveredColor = ImRaii.PushColor(ImGuiCol.TabHovered, ImGui.GetColorU32(ImGuiCol.TabHovered) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
         using var tabActiveColor = ImRaii.PushColor(ImGuiCol.TabActive, ImGui.GetColorU32(ImGuiCol.TabActive) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
         using var separatorColor = ImRaii.PushColor(ImGuiCol.Separator, ImGui.GetColorU32(ImGuiCol.Separator) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+        
+        // Use Dalamud's native collapse functionality - no need for custom button management
+        // Update title bar visibility based on settings
+        UpdateTitleBarVisibility();
+        
+        // If collapsed, don't draw the main content
+        if (ImGui.IsWindowCollapsed())
+        {
+            return;
+        }
         
         // Get all DM tabs that are not popped out individually
         var dmTabs = Plugin.Config.Tabs
@@ -550,6 +599,35 @@ public sealed class DMSectionWindow : Window
 
     private bool HasDMTabs()
     {
-        return Plugin.Config.Tabs.Any(tab => !tab.PopOut && tab is DMTab);
+        var dmTabs = Plugin.Config.Tabs.Where(tab => !tab.PopOut && tab is DMTab).ToList();
+        Plugin.Log.Debug($"HasDMTabs: Found {dmTabs.Count} DM tabs that are not popped out");
+        foreach (var tab in dmTabs)
+        {
+            if (tab is DMTab dmTab)
+            {
+                Plugin.Log.Debug($"HasDMTabs: DM tab for {dmTab.Player.DisplayName}, PopOut={tab.PopOut}");
+            }
+        }
+        return dmTabs.Any();
+    }
+    
+    /// <summary>
+    /// Updates the title bar visibility based on the collapse buttons setting.
+    /// </summary>
+    private void UpdateTitleBarVisibility()
+    {
+        if (Plugin.Config.ShowDMSectionCollapseButtons)
+        {
+            // Show title bar when collapse buttons are enabled
+            Flags &= ~ImGuiWindowFlags.NoTitleBar;
+        }
+        else
+        {
+            // Hide title bar when collapse buttons are disabled (follow main chat setting)
+            if (!Plugin.Config.ShowTitleBar)
+                Flags |= ImGuiWindowFlags.NoTitleBar;
+            else
+                Flags &= ~ImGuiWindowFlags.NoTitleBar;
+        }
     }
 }
