@@ -652,6 +652,30 @@ internal class DMManager
             
             // Add to the main configuration tabs list
             Plugin.Config.Tabs.Add(newTab);
+            Plugin.Log.Debug($"ConvertWindowToTab: Added new tab to config. Total tabs: {Plugin.Config.Tabs.Count}");
+            
+            // Save configuration to persist the new tab
+            _plugin.SaveConfig();
+            Plugin.Log.Debug($"ConvertWindowToTab: Saved configuration with new DM tab");
+            
+            // Ensure DM Section Window is properly registered and visible if needed
+            if (Plugin.Config.DMSectionPoppedOut)
+            {
+                Plugin.Log.Debug($"ConvertWindowToTab: DM Section is popped out, ensuring DM Section Window is visible");
+                
+                // Force the DM Section Window to be visible
+                if (_plugin.DMSectionWindow != null)
+                {
+                    _plugin.DMSectionWindow.IsOpen = true;
+                    
+                    // Ensure it's in the WindowSystem
+                    if (!_plugin.WindowSystem.Windows.Contains(_plugin.DMSectionWindow))
+                    {
+                        _plugin.WindowSystem.AddWindow(_plugin.DMSectionWindow);
+                        Plugin.Log.Debug($"ConvertWindowToTab: Added DM Section Window to WindowSystem");
+                    }
+                }
+            }
             
             // Transfer messages from window to new tab BEFORE any history loading
             if (windowMessages.Length > 0)
@@ -1477,8 +1501,20 @@ internal class DMManager
             // Mark messages as read when focusing
             dmTab.MarkAsRead();
             
-            // Note: Tab focusing will be handled by the UI layer
-            // The WantedTab property is on the Plugin instance, not static
+            // Find the tab index in the configuration and set it as wanted
+            if (Plugin.Config?.Tabs != null)
+            {
+                var tabIndex = Plugin.Config.Tabs.IndexOf(dmTab);
+                if (tabIndex >= 0)
+                {
+                    _plugin.WantedTab = tabIndex;
+                    Plugin.Log.Debug($"FocusDMTab: Set WantedTab to {tabIndex} for {dmTab.Player.DisplayName}");
+                }
+                else
+                {
+                    Plugin.Log.Warning($"FocusDMTab: Could not find tab index for {dmTab.Player.DisplayName}");
+                }
+            }
         }
         catch (Exception ex)
         {

@@ -77,62 +77,48 @@ internal static class MessageExtensions
 
         try
         {
-            // For outgoing tells, we need to extract the target player from the message
-            // The message sender chunks often contain the target information
+            Plugin.Log.Debug($"IsToPlayer: Checking outgoing tell for player '{player.Name}' on world {player.HomeWorld}");
             
-            // Check if any sender chunk contains the player name
-            foreach (var chunk in message.Sender)
+            // Reconstruct the full sender text from all chunks
+            var fullSenderText = string.Join("", message.Sender.Select(c => c.StringValue())).Trim();
+            Plugin.Log.Debug($"IsToPlayer: Full sender text: '{fullSenderText}'");
+            
+            // Handle "You:" format - these are converted outgoing messages
+            if (fullSenderText == "You:")
             {
-                var chunkText = chunk.StringValue();
-                if (string.IsNullOrEmpty(chunkText))
-                    continue;
-                
-                // Clean the chunk text and check if it matches our player
-                var cleanedChunkText = CleanPlayerName(chunkText);
-                
-                // Check for exact name match
-                if (string.Equals(cleanedChunkText, player.Name, StringComparison.OrdinalIgnoreCase))
+                Plugin.Log.Debug($"IsToPlayer: Found 'You:' format - assuming match (routed correctly)");
+                return true;
+            }
+            
+            // Handle original format: ">> PlayerName: " where PlayerName is the target
+            // The >> indicates YOU are sending TO that player
+            if (fullSenderText.StartsWith(">>") && fullSenderText.Contains(":"))
+            {
+                // Extract everything between ">>" and ":"
+                var match = System.Text.RegularExpressions.Regex.Match(fullSenderText, @">>\s*(.+?):");
+                if (match.Success)
                 {
-                    return true;
-                }
-                
-                // Check for name@world format
-                if (cleanedChunkText.Contains('@'))
-                {
-                    var parts = cleanedChunkText.Split('@');
-                    if (parts.Length == 2)
+                    var extractedText = match.Groups[1].Value.Trim();
+                    Plugin.Log.Debug($"IsToPlayer: Extracted target from >> format: '{extractedText}'");
+                    
+                    // Clean up the extracted text to get just the player name
+                    var cleanedName = CleanPlayerNameForComparison(extractedText);
+                    Plugin.Log.Debug($"IsToPlayer: Cleaned target name: '{cleanedName}'");
+                    
+                    // Compare with the target player name
+                    if (string.Equals(cleanedName, player.Name, StringComparison.OrdinalIgnoreCase))
                     {
-                        var nameFromChunk = parts[0].Trim();
-                        if (string.Equals(nameFromChunk, player.Name, StringComparison.OrdinalIgnoreCase))
-                        {
-                            return true;
-                        }
+                        Plugin.Log.Debug($"IsToPlayer: Target name matches! '{cleanedName}' == '{player.Name}'");
+                        return true;
                     }
+                }
+                else
+                {
+                    Plugin.Log.Debug($"IsToPlayer: Regex did not match for full sender text: '{fullSenderText}'");
                 }
             }
             
-            // Also check content chunks for player name (sometimes the target is mentioned there)
-            foreach (var chunk in message.Content)
-            {
-                var chunkText = chunk.StringValue();
-                if (string.IsNullOrEmpty(chunkText))
-                    continue;
-                
-                // Look for ">> PlayerName:" pattern in content
-                if (chunkText.Contains(">>") && chunkText.Contains(":"))
-                {
-                    var match = System.Text.RegularExpressions.Regex.Match(chunkText, @">>\s*([^:]+):");
-                    if (match.Success)
-                    {
-                        var nameFromContent = CleanPlayerName(match.Groups[1].Value);
-                        if (string.Equals(nameFromContent, player.Name, StringComparison.OrdinalIgnoreCase))
-                        {
-                            return true;
-                        }
-                    }
-                }
-            }
-            
+            Plugin.Log.Debug($"IsToPlayer: No match found for player '{player.Name}'");
             return false;
         }
         catch (Exception ex)
@@ -289,6 +275,46 @@ internal static class MessageExtensions
         cleaned = cleaned.Trim('[', ']', '"', '\'', ' ', '\t', '\n', '\r');
         
         // Remove any remaining whitespace
+        cleaned = cleaned.Trim();
+        
+        return cleaned;
+    }
+
+    /// <summary>
+    /// Cleans up a player name specifically for comparison in outgoing tells.
+    /// This handles the various formats that appear in FFXIV outgoing tell messages.
+    /// </summary>
+    /// <param name="rawText">The raw text extracted from the tell message</param>
+    /// <returns>Cleaned player name for comparison</returns>
+    private static string CleanPlayerNameForComparison(string rawText)
+    {
+        if (string.IsNullOrEmpty(rawText))
+            return string.Empty;
+
+        var cleaned = rawText.Trim();
+        
+        // Remove friend category symbols (♣, ♠, ♦, ♥, etc.)
+        // These are user-defined friend categories in FFXIV
+        cleaned = System.Text.RegularExpressions.Regex.Replace(cleaned, @"[♣♠♦♥♤♧♢♡]", "");
+        
+        // Handle CrossWorld format: "PlayerNameCrossWorldWorldName" -> "PlayerName"
+        if (cleaned.Contains("CrossWorld"))
+        {
+            var crossWorldMatch = System.Text.RegularExpressions.Regex.Match(cleaned, @"(.+?)CrossWorld");
+            if (crossWorldMatch.Success)
+            {
+                cleaned = crossWorldMatch.Groups[1].Value.Trim();
+            }
+        }
+        
+        // Remove any @ symbol and everything after it (world name)
+        var atIndex = cleaned.IndexOf('@');
+        if (atIndex >= 0)
+        {
+            cleaned = cleaned.Substring(0, atIndex);
+        }
+        
+        // Remove any remaining special characters and whitespace
         cleaned = cleaned.Trim();
         
         return cleaned;

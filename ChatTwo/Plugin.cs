@@ -323,6 +323,12 @@ public sealed class Plugin : IDalamudPlugin
                     DebugReloadCurrentDMHistory();
                     break;
                     
+                case "testregex":
+                case "regex":
+                    Plugin.Log.Info("Debug: Testing CrossWorld regex pattern");
+                    DebugTestCrossWorldRegex();
+                    break;
+                    
                 case "cleanup":
                 case "merge":
                     Plugin.Log.Info("Debug: Cleaning up duplicate DM tabs");
@@ -374,6 +380,7 @@ public sealed class Plugin : IDalamudPlugin
                     Plugin.Log.Info("  /chat2debugdm state - Log current tab state");
                     Plugin.Log.Info("  /chat2debugdm test - Run DM conversion test");
                     Plugin.Log.Info("  /chat2debugdm reload - Reload history for current DM tab");
+                    Plugin.Log.Info("  /chat2debugdm testregex - Test CrossWorld regex pattern");
                     Plugin.Log.Info("  /chat2debugdm cleanup - Clean up duplicate DM tabs");
                     Plugin.Log.Info("  /chat2debugdm aggressive - Run aggressive DM cleanup");
                     Plugin.Log.Info("  /chat2debugdm stale - Run stale reference cleanup");
@@ -428,6 +435,99 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     /// <summary>
+    /// Debug method to test the CrossWorld regex pattern with sample data.
+    /// </summary>
+    private void DebugTestCrossWorldRegex()
+    {
+        try
+        {
+            Plugin.Log.Info("=== TESTING OUTGOING TELL PARSING ===");
+            
+            // Test cases from the actual logs
+            var testCases = new[]
+            {
+                new { Chunk = ">> ♣Hanekawa KettCrossWorldJenova: ", PlayerName = "Hanekawa Kett" },
+                new { Chunk = ">> Harumi Aoi: ", PlayerName = "Harumi Aoi" },
+                new { Chunk = ">> ♣TestPlayerCrossWorldBehemoth: ", PlayerName = "TestPlayer" },
+                new { Chunk = ">> ♠John SmithCrossWorldPhoenix: ", PlayerName = "John Smith" }
+            };
+            
+            foreach (var testCase in testCases)
+            {
+                Plugin.Log.Info($"Testing: '{testCase.Chunk}' for player '{testCase.PlayerName}'");
+                
+                // Test the new parsing logic
+                if (testCase.Chunk.StartsWith(">>") && testCase.Chunk.Contains(":"))
+                {
+                    var match = System.Text.RegularExpressions.Regex.Match(testCase.Chunk, @">>\s*(.+?):");
+                    if (match.Success)
+                    {
+                        var extractedText = match.Groups[1].Value.Trim();
+                        Plugin.Log.Info($"  ✓ Extracted text: '{extractedText}'");
+                        
+                        // Clean up the extracted text
+                        var cleanedName = CleanPlayerNameForComparison(extractedText);
+                        Plugin.Log.Info($"  ✓ Cleaned name: '{cleanedName}'");
+                        Plugin.Log.Info($"  ✓ Name matches: {string.Equals(cleanedName, testCase.PlayerName, StringComparison.OrdinalIgnoreCase)}");
+                    }
+                    else
+                    {
+                        Plugin.Log.Info($"  ✗ Regex did not match");
+                    }
+                }
+                else
+                {
+                    Plugin.Log.Info($"  ✗ Does not match expected format");
+                }
+                Plugin.Log.Info("");
+            }
+            
+            Plugin.Log.Info("=== OUTGOING TELL PARSING TEST COMPLETE ===");
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"DebugTestCrossWorldRegex: Error: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Helper method for testing player name cleaning logic.
+    /// </summary>
+    private static string CleanPlayerNameForComparison(string rawText)
+    {
+        if (string.IsNullOrEmpty(rawText))
+            return string.Empty;
+
+        var cleaned = rawText.Trim();
+        
+        // Remove friend category symbols (♣, ♠, ♦, ♥, etc.)
+        // These are user-defined friend categories in FFXIV
+        cleaned = System.Text.RegularExpressions.Regex.Replace(cleaned, @"[♣♠♦♥♤♧♢♡]", "");
+        
+        // Handle CrossWorld format: "PlayerNameCrossWorldWorldName" -> "PlayerName"
+        if (cleaned.Contains("CrossWorld"))
+        {
+            var crossWorldMatch = System.Text.RegularExpressions.Regex.Match(cleaned, @"(.+?)CrossWorld");
+            if (crossWorldMatch.Success)
+            {
+                cleaned = crossWorldMatch.Groups[1].Value.Trim();
+            }
+        }
+        
+        // Remove any @ symbol and everything after it (world name)
+        var atIndex = cleaned.IndexOf('@');
+        if (atIndex >= 0)
+        {
+            cleaned = cleaned.Substring(0, atIndex);
+        }
+        
+        // Remove any remaining special characters and whitespace
+        cleaned = cleaned.Trim();
+        
+        return cleaned;
+    }
+
+    /// <summary>
     /// Shows instructions for reloading the plugin.
     /// </summary>
     private void DebugShowReloadInstructions()
@@ -447,7 +547,7 @@ public sealed class Plugin : IDalamudPlugin
             Plugin.Log.Info("After reload, your DM tabs should automatically reappear!");
             Plugin.Log.Info("=== END RELOAD INSTRUCTIONS ===");
             
-            // Also show a chat message for convenience
+            // Also show a chat message for convenience 
             try
             {
                 var reloadMessage = Message.FakeMessage(
@@ -556,8 +656,8 @@ public sealed class Plugin : IDalamudPlugin
                 Plugin.Log.Info($"  Config DM Tab: {dmTab.Player.DisplayName} (PopOut: {dmTab.PopOut})");
             }
             
-            // Show tracking state
-            var openTabs = dmManager.GetOpenDMTabs().ToList();
+            // Show tracking state 
+            var openTabs = dmManager.GetOpenDMTabs().ToList(); 
             var openWindows = dmManager.GetOpenDMWindows().ToList();
             
             Plugin.Log.Info($"Tracked DM tabs: {openTabs.Count}");
@@ -566,7 +666,7 @@ public sealed class Plugin : IDalamudPlugin
                 Plugin.Log.Info($"  Tracked Tab: {tab.Player.DisplayName}");
             }
             
-            Plugin.Log.Info($"Tracked DM windows: {openWindows.Count}");
+            Plugin.Log.Info($"Tracked DM windows: {openWindows.Count}"); 
             foreach (var window in openWindows)
             {
                 Plugin.Log.Info($"  Tracked Window: {window.DMTab.Player.DisplayName} (IsOpen: {window.IsOpen})");
@@ -968,11 +1068,13 @@ public sealed class Plugin : IDalamudPlugin
                             }
                         }
                         
-                        // Load message history from database (defer to avoid blocking)
-                        Task.Run(() =>
+                        // Load message history from database (defer to avoid blocking, but serialize to prevent concurrency issues)
+                        var loadHistoryTask = Task.Run(async () =>
                         {
                             try
                             {
+                                // Add a small delay to prevent concurrent MessageStore access
+                                await Task.Delay(100 * (i % 5)); // Stagger by 100ms intervals, max 500ms
                                 dmTab.LoadMessageHistoryFromStore();
                             }
                             catch (Exception ex)

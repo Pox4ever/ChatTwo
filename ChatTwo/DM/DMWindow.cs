@@ -467,8 +467,8 @@ internal class DMWindow : Window
         using var tabActiveColor = ImRaii.PushColor(ImGuiCol.TabActive, ImGui.GetColorU32(ImGuiCol.TabActive) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
         using var separatorColor = ImRaii.PushColor(ImGuiCol.Separator, ImGui.GetColorU32(ImGuiCol.Separator) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
 
-        // Calculate space for input area (including typing indicator space)
-        var inputHeight = ImGui.GetFrameHeight() + ImGui.GetStyle().ItemSpacing.Y * 2 + 16; // Extra space for typing indicator
+        // Calculate space for input area
+        var inputHeight = ImGui.GetFrameHeight() + ImGui.GetStyle().ItemSpacing.Y * 2;
         var messageLogHeight = ImGui.GetContentRegionAvail().Y - inputHeight;
 
         // Draw message log or empty state using lightweight rendering
@@ -978,35 +978,6 @@ internal class DMWindow : Window
         return ((uint)a << 24) | ((uint)r << 16) | ((uint)g << 8) | b;
     }
 
-    /// <summary>
-    /// Draws an animated typing indicator with bouncing dots.
-    /// </summary>
-    private void DrawAnimatedTypingIndicator()
-    {
-        var time = (float)(FrameTime / 1000.0); // Convert to seconds
-        var baseColor = 0xFF888888;
-        
-        using (ImRaii.PushColor(ImGuiCol.Text, ColourUtil.RgbaToAbgr(baseColor)))
-        {
-            ImGui.TextUnformatted("Typing");
-            ImGui.SameLine();
-            
-            // Animated dots with different phases
-            for (int i = 0; i < 3; i++)
-            {
-                var phase = time * 3f + i * 0.5f; // Different timing for each dot
-                var bounce = (float)(Math.Sin(phase) * 0.5 + 0.5); // 0 to 1
-                var alpha = 0.3f + bounce * 0.7f; // 0.3 to 1.0
-                
-                var dotColor = ApplyAlphaToColor(baseColor, alpha);
-                using (ImRaii.PushColor(ImGuiCol.Text, ColourUtil.RgbaToAbgr(dotColor)))
-                {
-                    ImGui.TextUnformatted(".");
-                    if (i < 2) ImGui.SameLine();
-                }
-            }
-        }
-    }
     private void DrawSimpleChunks(IReadOnlyList<Chunk> chunks)
     {
         for (var i = 0; i < chunks.Count; i++)
@@ -1215,17 +1186,7 @@ internal class DMWindow : Window
         ImGui.SameLine();
         DrawActionButtons();
 
-        // Draw typing indicator below the input area if needed (only when ModernUI is enabled and there's text)
-        if (Plugin.Config.ModernUIEnabled && Plugin.Config.ShowTypingIndicator && !DMTab.InputDisabled && !string.IsNullOrEmpty(DMChat))
-        {
-            var currentPos = ImGui.GetCursorPos();
-            ImGui.SetCursorPos(currentPos + new Vector2(8, 4)); // Offset from left edge
-            
-            // Animated typing indicator
-            DrawAnimatedTypingIndicator();
-            
-            ImGui.SetCursorPos(currentPos + new Vector2(0, 16)); // Move cursor down to reserve space
-        }
+        // Typing indicator removed per user request - was showing "Typing..." animation below input
     }
 
     /// <summary>

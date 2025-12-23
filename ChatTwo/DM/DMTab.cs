@@ -223,11 +223,39 @@ internal class DMTab : Tab
         }
     }
 
+    // Static semaphore to prevent concurrent MessageStore access
+    private static readonly SemaphoreSlim HistoryLoadSemaphore = new(1, 1);
+
     /// <summary>
     /// Loads message history from the persistent MessageStore database.
     /// This ensures message history survives plugin reloads.
     /// </summary>
     public void LoadMessageHistoryFromStore()
+    {
+        try
+        {
+            // Wait for exclusive access to prevent concurrent MessageStore access
+            HistoryLoadSemaphore.Wait();
+            
+            try
+            {
+                LoadMessageHistoryFromStoreInternal();
+            }
+            finally
+            {
+                HistoryLoadSemaphore.Release();
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"LoadMessageHistoryFromStore: Error for {Player.DisplayName}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Internal method that does the actual history loading work.
+    /// </summary>
+    private void LoadMessageHistoryFromStoreInternal()
     {
         try
         {
@@ -248,6 +276,7 @@ internal class DMTab : Tab
             
             var historyCount = Math.Max(1, Math.Min(200, Plugin.Config.DMMessageHistoryCount));
             Plugin.Log.Info($"Loading up to {historyCount} messages from history for {Player.DisplayName}");
+            Plugin.Log.Debug($"LoadMessageHistoryFromStore: Target player - Name: '{Player.Name}', World: {Player.HomeWorld}, ContentId: {Player.ContentId:X16}");
             
             // Load messages from the persistent MessageStore database
             var loadedMessages = new List<Message>();
@@ -256,15 +285,55 @@ internal class DMTab : Tab
             var searchLimit = Math.Max(2000, historyCount * 20); // Increased search limit to find more messages
             Plugin.Log.Debug($"Searching through {searchLimit} recent messages for {Player.DisplayName}");
             
+            var totalTellsFound = 0;
+            var matchingTellsFound = 0;
+            
             using (var messageEnumerator = dmManager.PluginInstance.MessageManager.Store.GetMostRecentMessages(count: searchLimit))
             {
                 foreach (var message in messageEnumerator)
                 {
+                    // Count all tells for debugging
+                    if (message.IsTell())
+                    {
+                        totalTellsFound++;
+                        
+                        // Debug: Log details of tell messages to understand the format
+                        if (totalTellsFound <= 10) // Only log first 10 for debugging
+                        {
+                            var senderText = string.Join("", message.Sender.Select(c => c.StringValue()));
+                            var contentText = string.Join("", message.Content.Select(c => c.StringValue()));
+                            Plugin.Log.Debug($"Tell #{totalTellsFound}: Type={message.Code.Type}, Sender='{senderText}', Content='{contentText}', ContentId={message.ContentId:X16}");
+                            
+                            // Test if this message would match our player
+                            var isRelated = message.IsRelatedToPlayer(Player);
+                            Plugin.Log.Debug($"  -> IsRelatedToPlayer result: {isRelated}");
+                            
+                            if (senderText.Contains("Hanekawa", StringComparison.OrdinalIgnoreCase) || 
+                                contentText.Contains("Hanekawa", StringComparison.OrdinalIgnoreCase))
+                            {
+                                Plugin.Log.Debug($"  -> Contains 'Hanekawa' - should match!");
+                                
+                                // Debug the extraction
+                                var extractedPlayer = message.ExtractPlayerFromMessage();
+                                if (extractedPlayer != null)
+                                {
+                                    Plugin.Log.Debug($"  -> Extracted player: Name='{extractedPlayer.Name}', World={extractedPlayer.HomeWorld}, ContentId={extractedPlayer.ContentId:X16}");
+                                    Plugin.Log.Debug($"  -> Player.Equals result: {extractedPlayer.Equals(Player)}");
+                                }
+                                else
+                                {
+                                    Plugin.Log.Debug($"  -> Failed to extract player from message");
+                                }
+                            }
+                        }
+                    }
+                    
                     // Check if this is a tell message related to our target player
                     if (message.IsTell() && message.IsRelatedToPlayer(Player))
                     {
+                        matchingTellsFound++;
                         loadedMessages.Add(message);
-                        Plugin.Log.Debug($"Found matching message: {message.Code.Type} - {string.Join("", message.Sender.Select(c => c.StringValue()))}");
+                        Plugin.Log.Debug($"Found matching message #{matchingTellsFound}: {message.Code.Type} - {string.Join("", message.Sender.Select(c => c.StringValue()))}");
                         
                         // Stop after finding enough messages
                         if (loadedMessages.Count >= historyCount)
@@ -273,7 +342,7 @@ internal class DMTab : Tab
                 }
             }
             
-            Plugin.Log.Info($"Found {loadedMessages.Count} matching messages for {Player.DisplayName}");
+            Plugin.Log.Info($"Found {totalTellsFound} total tells, {matchingTellsFound} matching messages for {Player.DisplayName}");
             
             // Take the most recent messages as configured
             var recentMessages = loadedMessages
