@@ -1437,10 +1437,9 @@ public sealed class ChatLogWindow : Window
 
         activeTab.CurrentChannel.ResetTempChannel();
         Chat = string.Empty;
-        if (Plugin.Config.KeepInputFocus)
-        {
-            Activate = true; // Maintain focus after sending message
-        }
+        // For regular chat messages (non-DM), always return focus to game
+        // KeepInputFocus only applies to DM tabs/windows and tell messages
+        // (Regular chat focus behavior is handled above for DM/tell cases)
     }
 
     /// <summary>

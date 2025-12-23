@@ -1234,8 +1234,8 @@ internal class DMWindow : Window
             }
         }
         
-        // Maintain focus on the input field after sending a message
-        if (shouldMaintainFocus)
+        // Maintain focus on the input field after sending a message (only if KeepInputFocus is enabled)
+        if (shouldMaintainFocus && Plugin.Config.KeepInputFocus)
         {
             ImGui.SetKeyboardFocusHere(-1); // Focus the input field (1 item back)
         }

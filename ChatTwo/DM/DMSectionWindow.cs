@@ -372,13 +372,18 @@ public sealed class DMSectionWindow : Window
             // Track if we should maintain focus
             var shouldMaintainFocus = false;
             
-            // CRITICAL FIX: Focus input field when tab is focused via "Focus DM" OR maintain focus after sending
-            if (_focusInputField || _maintainInputFocus)
+            // CRITICAL FIX: Focus input field when tab is focused via "Focus DM" OR maintain focus after sending (if enabled)
+            if (_focusInputField || (_maintainInputFocus && Plugin.Config.KeepInputFocus))
             {
                 ImGui.SetKeyboardFocusHere();
                 _focusInputField = false;
                 _maintainInputFocus = false;
                 Plugin.Log.Info($"DMSectionWindow: Focused input field for DM tab");
+            }
+            else if (_maintainInputFocus)
+            {
+                // Reset the flag even if we don't focus (when KeepInputFocus is disabled)
+                _maintainInputFocus = false;
             }
             
             // Enhanced input field with better visual feedback (same as main chat and DM windows)
