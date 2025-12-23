@@ -156,8 +156,15 @@ public sealed class Plugin : IDalamudPlugin
 
             MessageManager = new MessageManager(this); // requires Ui
 
+            // PERSISTENCE: Restore existing DM windows after MessageManager is created
+            // This ensures that DM windows can properly load message history from the MessageStore
+            DMManager.Instance.RestoreExistingDMWindows();
+
             // Register debug command BEFORE Commands.Initialise() so it gets properly added
             Commands.Register("/chat2debugdm", "Debug DM tab conversion", false).Execute += DebugDMCommand;
+            
+            // Register DM window restoration command
+            Commands.Register("/chat2dmrestore", "Restore DM windows after plugin reload", false).Execute += RestoreDMWindowsCommand;
 
             // let all the other components register, then initialize commands
             Commands.Initialise();
@@ -204,8 +211,9 @@ public sealed class Plugin : IDalamudPlugin
     [SuppressMessage("ReSharper", "ConditionalAccessQualifierIsNonNullableAccordingToAPIContract")]
     public void Dispose()
     {
-        // Clean up debug command
+        // Clean up debug commands
         Commands.Register("/chat2debugdm", "Debug DM tab conversion", false).Execute -= DebugDMCommand;
+        Commands.Register("/chat2dmrestore", "Restore DM windows after plugin reload", false).Execute -= RestoreDMWindowsCommand;
         
         Interface.LanguageChanged -= LanguageChanged;
         Interface.UiBuilder.Draw -= Draw;
@@ -526,7 +534,7 @@ public sealed class Plugin : IDalamudPlugin
     
     /// <summary>
     /// Debug method to show the current DM state for troubleshooting.
-    /// </summary>
+    /// </summary> 
     private void DebugShowDMState()
     {
         try
@@ -564,7 +572,7 @@ public sealed class Plugin : IDalamudPlugin
                 Plugin.Log.Info($"  Tracked Window: {window.DMTab.Player.DisplayName} (IsOpen: {window.IsOpen})");
             }
             
-            // Check what tabs would be shown in DM Section Window
+            // Check what tabs would be shown in DM Section Window  
             if (Config.DMSectionPoppedOut && DMSectionWindow?.IsOpen == true)
             {
                 var dmTabsForSection = Config.Tabs
@@ -1579,6 +1587,24 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     public static bool InBattle => Condition[ConditionFlag.InCombat];
+
+    /// <summary>
+    /// Command handler for restoring DM windows after plugin reload.
+    /// </summary>
+    private void RestoreDMWindowsCommand(string command, string arguments)
+    {
+        try
+        {
+            Log.Info("RestoreDMWindowsCommand: Manually restoring DM windows");
+            DMManager.Instance.RestoreExistingDMWindows();
+            Log.Info("RestoreDMWindowsCommand: DM window restoration completed");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"RestoreDMWindowsCommand: Error restoring DM windows: {ex.Message}");
+        }
+    }
+
     public static bool GposeActive => Condition[ConditionFlag.WatchingCutscene];
     public static bool CutsceneActive => Condition[ConditionFlag.OccupiedInCutSceneEvent] || Condition[ConditionFlag.WatchingCutscene78];
 }

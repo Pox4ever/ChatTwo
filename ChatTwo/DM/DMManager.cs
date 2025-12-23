@@ -214,6 +214,9 @@ internal class DMManager
             // Add to the window system
             chatLogWindow.Plugin.WindowSystem.AddWindow(dmWindow);
             
+            // PERSISTENCE: Save DM window state to configuration for restoration after plugin reload
+            SaveDMWindowState(player, dmWindow);
+            
             return dmWindow;
         }
         catch (Exception ex)
@@ -265,6 +268,9 @@ internal class DMManager
                         Plugin.Log.Warning($"Failed to remove DM window from WindowSystem: {ex.Message}");
                     }
                 }
+                
+                // PERSISTENCE: Remove DM window state from configuration
+                RemoveDMWindowState(player);
                 
                 return true;
             }
@@ -2005,6 +2011,174 @@ internal class DMManager
         catch (Exception ex)
         {
             Plugin.Log.Error($"Failed to perform aggressive cleanup: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Saves the state of a DM window to configuration for persistence across plugin reloads.
+    /// </summary>
+    /// <param name="player">The player whose DM window to save</param>
+    /// <param name="dmWindow">The DM window to save state for</param>
+    private void SaveDMWindowState(DMPlayer player, DMWindow dmWindow)
+    {
+        try
+        {
+            if (Plugin.Config == null)
+                return;
+
+            Plugin.Log.Debug($"SaveDMWindowState: Saving state for DM window: {player.DisplayName}");
+
+            // Remove any existing state for this player
+            RemoveDMWindowState(player);
+
+            // Create new window state
+            var windowState = new DMWindowState(
+                player,
+                dmWindow.Position ?? new System.Numerics.Vector2(100, 100),
+                dmWindow.Size ?? new System.Numerics.Vector2(400, 300),
+                dmWindow.IsOpen
+            );
+
+            // Add to configuration
+            Plugin.Config.OpenDMWindows.Add(windowState);
+
+            // Save configuration
+            _plugin.SaveConfig();
+
+            Plugin.Log.Debug($"SaveDMWindowState: Successfully saved state for {player.DisplayName}");
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"SaveDMWindowState: Failed to save DM window state for {player.DisplayName}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Removes the state of a DM window from configuration.
+    /// </summary>
+    /// <param name="player">The player whose DM window state to remove</param>
+    private void RemoveDMWindowState(DMPlayer player)
+    {
+        try
+        {
+            if (Plugin.Config == null)
+                return;
+
+            Plugin.Log.Debug($"RemoveDMWindowState: Removing state for DM window: {player.DisplayName}");
+
+            // Find and remove existing state for this player
+            var existingState = Plugin.Config.OpenDMWindows.FirstOrDefault(w => 
+                w.PlayerName == player.Name && w.WorldId == player.HomeWorld);
+
+            if (existingState != null)
+            {
+                Plugin.Config.OpenDMWindows.Remove(existingState);
+                _plugin.SaveConfig();
+                Plugin.Log.Debug($"RemoveDMWindowState: Successfully removed state for {player.DisplayName}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"RemoveDMWindowState: Failed to remove DM window state for {player.DisplayName}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Restores DM windows from configuration after plugin reload.
+    /// This ensures that DM windows that were open before plugin reload are properly restored.
+    /// </summary>
+    public void RestoreExistingDMWindows()
+    {
+        try
+        {
+            if (Plugin.Config?.OpenDMWindows == null)
+            {
+                Plugin.Log.Debug("RestoreExistingDMWindows: No configuration or DM windows to restore");
+                return;
+            }
+
+            var windowsToRestore = Plugin.Config.OpenDMWindows.ToList();
+            Plugin.Log.Info($"RestoreExistingDMWindows: Found {windowsToRestore.Count} DM windows to restore");
+
+            foreach (var windowState in windowsToRestore)
+            {
+                try
+                {
+                    var player = windowState.ToDMPlayer();
+                    Plugin.Log.Info($"RestoreExistingDMWindows: Restoring DM window for {player.DisplayName}");
+
+                    // Check if window is already open (shouldn't happen, but safety check)
+                    if (_openWindows.ContainsKey(player))
+                    {
+                        Plugin.Log.Debug($"RestoreExistingDMWindows: DM window already exists for {player.DisplayName}, skipping");
+                        continue;
+                    }
+
+                    // Create and restore the DM window
+                    var chatLogWindow = _plugin.ChatLogWindow;
+                    if (chatLogWindow == null)
+                    {
+                        Plugin.Log.Error("RestoreExistingDMWindows: ChatLogWindow is null, cannot restore DM windows");
+                        break;
+                    }
+
+                    var dmWindow = new DMWindow(chatLogWindow, player);
+                    
+                    // Restore window position and size
+                    dmWindow.Position = windowState.Position;
+                    dmWindow.Size = windowState.Size;
+                    dmWindow.IsOpen = windowState.IsOpen;
+
+                    // Add to tracking
+                    _openWindows.TryAdd(player, dmWindow);
+
+                    // Add to WindowSystem
+                    _plugin.WindowSystem.AddWindow(dmWindow);
+
+                    Plugin.Log.Info($"RestoreExistingDMWindows: Successfully restored DM window for {player.DisplayName}");
+                }
+                catch (Exception ex)
+                {
+                    Plugin.Log.Error($"RestoreExistingDMWindows: Failed to restore DM window for {windowState.PlayerName}: {ex.Message}");
+                }
+            }
+
+            Plugin.Log.Info($"RestoreExistingDMWindows: Completed restoration of {windowsToRestore.Count} DM windows");
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"RestoreExistingDMWindows: Error restoring DM windows: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Updates the position and size of a DM window in the configuration.
+    /// This should be called when a DM window is moved or resized.
+    /// </summary>
+    /// <param name="player">The player whose DM window was updated</param>
+    /// <param name="position">The new position of the window</param>
+    /// <param name="size">The new size of the window</param>
+    public void UpdateDMWindowState(DMPlayer player, System.Numerics.Vector2 position, System.Numerics.Vector2 size)
+    {
+        try
+        {
+            if (Plugin.Config == null)
+                return;
+
+            var existingState = Plugin.Config.OpenDMWindows.FirstOrDefault(w => 
+                w.PlayerName == player.Name && w.WorldId == player.HomeWorld);
+
+            if (existingState != null)
+            {
+                existingState.Position = position;
+                existingState.Size = size;
+                _plugin.SaveConfig();
+                Plugin.Log.Debug($"UpdateDMWindowState: Updated position/size for {player.DisplayName}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"UpdateDMWindowState: Failed to update DM window state for {player.DisplayName}: {ex.Message}");
         }
     }
 }

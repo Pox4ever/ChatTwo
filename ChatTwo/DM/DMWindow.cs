@@ -133,6 +133,8 @@ internal class DMWindow : Window
     {
         try
         {
+            Plugin.Log.Debug($"LoadMessageHistory: Starting history load for {Player.DisplayName}");
+            
             // Check if message history loading is enabled
             if (!Plugin.Config.LoadDMMessageHistory)
             {
@@ -156,6 +158,13 @@ internal class DMWindow : Window
             {
                 Plugin.Log.Debug($"DMWindow: Skipping history load - already have {currentCount} messages for {Player.DisplayName}");
                 return; // Already have messages, skip history load to avoid duplication
+            }
+
+            // Check if MessageManager is available
+            if (ChatLogWindow?.Plugin?.MessageManager?.Store == null)
+            {
+                Plugin.Log.Warning($"LoadMessageHistory: MessageManager or Store is null for {Player.DisplayName} - cannot load history");
+                return;
             }
 
             var historyCount = Math.Max(1, Math.Min(200, Plugin.Config.DMMessageHistoryCount));
@@ -1793,6 +1802,19 @@ internal class DMWindow : Window
 
     public override void PostDraw()
     {
+        // PERSISTENCE: Update DM window state in configuration when position/size changes
+        try
+        {
+            if (Position.HasValue && Size.HasValue)
+            {
+                DMManager.Instance.UpdateDMWindowState(Player, Position.Value, Size.Value);
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Debug($"PostDraw: Failed to update DM window state: {ex.Message}");
+        }
+
         // Pop custom font if it was pushed
         // TODO: Fix font manager integration
         // if (Plugin.Config.FontsEnabled && ChatLogWindow.Plugin.FontManager.HasFonts)
@@ -1818,9 +1840,15 @@ internal class DMWindow : Window
         // Remove from window system
         ChatLogWindow.Plugin.WindowSystem.RemoveWindow(this);
 
-        // Notify DMManager that this window is closed
-        // Note: We don't have a window tracking system in DMManager yet, 
-        // but this is where we would remove it from tracking
+        // PERSISTENCE: Notify DMManager that this window is closed so it can be removed from persistence
+        try
+        {
+            DMManager.Instance.CloseDMWindow(Player);
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Debug($"OnClose: Failed to notify DMManager of window closure: {ex.Message}");
+        }
     }
 
     private enum HideState

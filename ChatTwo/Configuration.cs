@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Concurrent;
 using ChatTwo.Code;
+using ChatTwo.DM;
 using ChatTwo.GameFunctions.Types;
 using ChatTwo.Resources;
 using ChatTwo.Util;
@@ -204,6 +205,9 @@ internal class Configuration : IPluginConfiguration
     public uint DMIncomingColor { get; set; } = 0xFFFFB3FF; // Default FFXIV tell color (pinkish)
     public uint DMOutgoingColor { get; set; } = 0xFFFFB3FF; // Same color for consistency
     public uint DMErrorColor { get; set; } = 0xFF4444FF; // Red color for error messages
+    
+    // DM Window Persistence Settings
+    public List<DMWindowState> OpenDMWindows { get; set; } = new(); // Persisted DM windows that should be restored on plugin reload
 
     internal void UpdateFrom(Configuration other, bool backToOriginal)
     {
@@ -372,6 +376,9 @@ internal class Configuration : IPluginConfiguration
         DMIncomingColor = other.DMIncomingColor;
         DMOutgoingColor = other.DMOutgoingColor;
         DMErrorColor = other.DMErrorColor;
+        
+        // DM Window Persistence Settings
+        OpenDMWindows = other.OpenDMWindows?.Select(w => w.Clone()).ToList() ?? new();
     }
 }
 
@@ -862,4 +869,48 @@ internal static class DMDefaultModeExt
         Configuration.DMDefaultMode.Ask => "Show both tab and window options in context menu",
         _ => null,
     };
+}
+
+/// <summary>
+/// Represents the persistent state of a DM Window that should be restored after plugin reload.
+/// </summary>
+[Serializable]
+internal class DMWindowState
+{
+    public string PlayerName { get; set; } = "";
+    public uint WorldId { get; set; }
+    public ulong ContentId { get; set; }
+    public System.Numerics.Vector2 Position { get; set; }
+    public System.Numerics.Vector2 Size { get; set; }
+    public bool IsOpen { get; set; } = true;
+    
+    public DMWindowState() { }
+    
+    public DMWindowState(DMPlayer player, System.Numerics.Vector2 position, System.Numerics.Vector2 size, bool isOpen = true)
+    {
+        PlayerName = player.Name;
+        WorldId = player.HomeWorld;
+        ContentId = player.ContentId;
+        Position = position;
+        Size = size;
+        IsOpen = isOpen;
+    }
+    
+    public DMPlayer ToDMPlayer()
+    {
+        return new DMPlayer(PlayerName, WorldId, ContentId);
+    }
+    
+    public DMWindowState Clone()
+    {
+        return new DMWindowState
+        {
+            PlayerName = PlayerName,
+            WorldId = WorldId,
+            ContentId = ContentId,
+            Position = Position,
+            Size = Size,
+            IsOpen = IsOpen
+        };
+    }
 }
