@@ -545,9 +545,9 @@ public sealed class Plugin : IDalamudPlugin
             Plugin.Log.Info("  3. Click the reload button");
             Plugin.Log.Info("");
             Plugin.Log.Info("After reload, your DM tabs should automatically reappear!");
-            Plugin.Log.Info("=== END RELOAD INSTRUCTIONS ===");
+            Plugin.Log.Info("=== END RELOAD INSTRUCTIONS ==="); 
             
-            // Also show a chat message for convenience 
+            // Also show a chat message for convenience
             try
             {
                 var reloadMessage = Message.FakeMessage(
@@ -578,7 +578,7 @@ public sealed class Plugin : IDalamudPlugin
     }
     
     /// <summary>
-    /// Debug method to show the current DM Section Window state.
+    /// Debug method to show the current DM Section Window state.  
     /// </summary>
     private void DebugDMSectionWindowState()
     {

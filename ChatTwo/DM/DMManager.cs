@@ -1020,6 +1020,9 @@ internal class DMManager
             // Add the window to the window system
             _plugin.WindowSystem.AddWindow(dmWindow);
             
+            // PERSISTENCE: Save DM window state to configuration for restoration after plugin reload
+            SaveDMWindowState(player, dmWindow);
+            
             Plugin.Log.Info($"ConvertTabToWindow: Successfully converted DM tab to window for {player.DisplayName}");
             return dmWindow;
         }
