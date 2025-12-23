@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using ChatTwo.Code;
+using ChatTwo.DM;
 using ChatTwo.Resources;
 using ChatTwo.Util;
 using Dalamud.Game.Text;
@@ -286,6 +287,10 @@ internal class MessageManager : IAsyncDisposable
         {
             // Skip DM tabs - they are handled by DMMessageRouter to prevent duplication
             if (tab is ChatTwo.DM.DMTab)
+                continue;
+
+            // Check if this is a tell message and if it should be shown in main chat
+            if (message.IsTell() && !Plugin.Config.ShowTellsInMainChat)
                 continue;
 
             var unread = !(tab.UnreadMode == UnreadMode.Unseen && Plugin.CurrentTab != tab && currentMatches);
