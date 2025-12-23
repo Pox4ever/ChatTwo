@@ -1885,8 +1885,6 @@ internal class DMManager
                 _plugin?.SaveConfig();
                 Plugin.Log.Info($"CleanupStaleReferences: Saved configuration after removing {orphanedDMTabs.Count} orphaned DM tabs");
             }
-            
-            Plugin.Log.Info($"CleanupStaleReferences: Cleaned up {staleWindows.Count} stale windows, {staleTabs.Count} stale tabs, and {orphanedDMTabs.Count} orphaned DM tabs");
         }
         catch (Exception ex)
         {
