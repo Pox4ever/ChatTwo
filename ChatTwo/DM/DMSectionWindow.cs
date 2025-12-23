@@ -32,21 +32,19 @@ public sealed class DMSectionWindow : Window
         Plugin = plugin;
         ChatLogWindow = chatLogWindow;
         
-        // Set initial size and position to be independent from main chat window
+        // Copy the EXACT same window setup as ChatLogWindow
         Size = new Vector2(500, 400);
         SizeCondition = ImGuiCond.FirstUseEver;
         
-        // Position the DM window to the right of the main chat window by default
-        // This will only apply on first use, after that user positioning is remembered
-        Position = new Vector2(550, 100); // Offset from typical main chat position
+        // Use the same position condition as main chat
         PositionCondition = ImGuiCond.FirstUseEver;
+        Position = new Vector2(550, 100);
         
-        // Make sure the window is always considered "open" - DrawConditions will control visibility
+        // Copy the exact same window properties as main chat
         IsOpen = true;
-        RespectCloseHotkey = false; // Don't let users close it with hotkey
+        RespectCloseHotkey = false;
+        DisableWindowSounds = true;
         
-        // Apply same window settings as main chat but ensure it's independently resizable
-        Flags = ImGuiWindowFlags.None;
         if (!Plugin.Config.CanMove)
             Flags |= ImGuiWindowFlags.NoMove;
         if (!Plugin.Config.CanResize)
@@ -54,27 +52,6 @@ public sealed class DMSectionWindow : Window
         
         // Conditionally show title bar based on collapse buttons setting
         UpdateTitleBarVisibility();
-    }
-
-    public override void PreDraw()
-    {
-        // Apply same styling as main chat window
-        if (Plugin.Config is { OverrideStyle: true, ChosenStyle: not null })
-            StyleModel.GetConfiguredStyles()?.FirstOrDefault(style => style.Name == Plugin.Config.ChosenStyle)?.Push();
-            
-        ModernUI.BeginModernStyle(Plugin.Config);
-        
-        // Apply transparency like main chat window
-        // BgAlpha is now set in Draw() method for proper focus-based transparency
-        // Don't set it here as it would override the focus-based transparency
-    }
-
-    public override void PostDraw()
-    {
-        ModernUI.EndModernStyle();
-        
-        if (Plugin.Config is { OverrideStyle: true, ChosenStyle: not null })
-            StyleModel.GetConfiguredStyles()?.FirstOrDefault(style => style.Name == Plugin.Config.ChosenStyle)?.Pop();
     }
 
     public override bool DrawConditions()
@@ -125,36 +102,6 @@ public sealed class DMSectionWindow : Window
 
     public override void Draw()
     {
-        // Update focus state and apply transparency
-        var isWindowFocused = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
-        var alpha = Plugin.Config.WindowAlpha / 100f;
-        
-        if (!isWindowFocused)
-        {
-            var transparencyFactor = Plugin.Config.UnfocusedTransparency / 100f;
-            BgAlpha = alpha * transparencyFactor;
-        }
-        else
-        {
-            BgAlpha = alpha;
-        }
-        
-        // Apply transparency to UI elements based on focus state
-        var uiAlpha = isWindowFocused ? 1.0f : (Plugin.Config.UnfocusedTransparency / 100f);
-        
-        // Push style colors for UI elements with transparency
-        using var textColor = ImRaii.PushColor(ImGuiCol.Text, ImGui.GetColorU32(ImGuiCol.Text) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
-        using var buttonColor = ImRaii.PushColor(ImGuiCol.Button, ImGui.GetColorU32(ImGuiCol.Button) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
-        using var buttonHoveredColor = ImRaii.PushColor(ImGuiCol.ButtonHovered, ImGui.GetColorU32(ImGuiCol.ButtonHovered) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
-        using var buttonActiveColor = ImRaii.PushColor(ImGuiCol.ButtonActive, ImGui.GetColorU32(ImGuiCol.ButtonActive) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
-        using var frameColor = ImRaii.PushColor(ImGuiCol.FrameBg, ImGui.GetColorU32(ImGuiCol.FrameBg) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
-        using var frameHoveredColor = ImRaii.PushColor(ImGuiCol.FrameBgHovered, ImGui.GetColorU32(ImGuiCol.FrameBgHovered) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
-        using var frameActiveColor = ImRaii.PushColor(ImGuiCol.FrameBgActive, ImGui.GetColorU32(ImGuiCol.FrameBgActive) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
-        using var tabColor = ImRaii.PushColor(ImGuiCol.Tab, ImGui.GetColorU32(ImGuiCol.Tab) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
-        using var tabHoveredColor = ImRaii.PushColor(ImGuiCol.TabHovered, ImGui.GetColorU32(ImGuiCol.TabHovered) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
-        using var tabActiveColor = ImRaii.PushColor(ImGuiCol.TabActive, ImGui.GetColorU32(ImGuiCol.TabActive) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
-        using var separatorColor = ImRaii.PushColor(ImGuiCol.Separator, ImGui.GetColorU32(ImGuiCol.Separator) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
-        
         // Use Dalamud's native collapse functionality - no need for custom button management
         // Update title bar visibility based on settings
         UpdateTitleBarVisibility();
@@ -181,7 +128,6 @@ public sealed class DMSectionWindow : Window
         var activeTabIndex = -1;
         DMTab? activeTab = null;
         
-        using (ModernUI.PushModernTabStyle(Plugin.Config))
         using (var tabBar = ImRaii.TabBar("##dm-section-tabs"))
         {
             if (!tabBar.Success)

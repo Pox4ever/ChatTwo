@@ -99,10 +99,13 @@ public static class ModernUI
     {
         var colors = ImGui.GetStyle().Colors;
         
-        // Modern dark theme with subtle accents - more aggressive application
-        colors[(int)ImGuiCol.WindowBg] = new Vector4(0.11f, 0.11f, 0.13f, 0.95f);
-        colors[(int)ImGuiCol.ChildBg] = new Vector4(0.13f, 0.13f, 0.15f, 0.8f);
-        colors[(int)ImGuiCol.PopupBg] = new Vector4(0.09f, 0.09f, 0.11f, 0.98f);
+        // Calculate transparency factor based on config
+        var baseAlpha = config.WindowAlpha / 100f;
+        
+        // Modern dark theme with subtle accents - respect user transparency settings
+        colors[(int)ImGuiCol.WindowBg] = new Vector4(0.11f, 0.11f, 0.13f, 0.95f * baseAlpha);
+        colors[(int)ImGuiCol.ChildBg] = new Vector4(0.13f, 0.13f, 0.15f, 0.8f * baseAlpha);
+        colors[(int)ImGuiCol.PopupBg] = new Vector4(0.09f, 0.09f, 0.11f, 0.98f * baseAlpha);
         
         // Modern frame colors - more noticeable
         colors[(int)ImGuiCol.FrameBg] = new Vector4(0.25f, 0.25f, 0.28f, 0.9f);
