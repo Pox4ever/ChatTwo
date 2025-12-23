@@ -39,6 +39,9 @@ internal class DMWindow : Window
     // Input state for DM window
     private string DMChat = string.Empty;
     private bool DMInputFocused;
+    
+    // Input focus activation (similar to ChatLogWindow.Activate)
+    internal bool Activate = false;
 
     // Window positioning for cascading
     private static int WindowCount = 0;
@@ -1196,6 +1199,16 @@ internal class DMWindow : Window
     /// <param name="flags">Input text flags</param>
     private void DrawInputField(bool isChatEnabled, ImGuiInputTextFlags flags)
     {
+        // Track if we should maintain focus after sending
+        var shouldMaintainFocus = false;
+        
+        // Focus input field if Activate is set (similar to ChatLogWindow)
+        if (isChatEnabled && Activate)
+        {
+            ImGui.SetKeyboardFocusHere();
+            Activate = false; // Reset after use
+        }
+        
         // Placeholder shows that this is a direct message input
         var placeholder = isChatEnabled ? $"Message {Player.TabName}..." : Language.ChatLog_DisabledInput;
         
@@ -1207,6 +1220,7 @@ internal class DMWindow : Window
             if (!string.IsNullOrWhiteSpace(DMChat))
             {
                 SendDMMessage();
+                shouldMaintainFocus = true; // Maintain focus after sending
             }
         }
         
@@ -1216,7 +1230,14 @@ internal class DMWindow : Window
             if (!string.IsNullOrWhiteSpace(DMChat))
             {
                 SendDMMessage();
+                shouldMaintainFocus = true; // Maintain focus after sending
             }
+        }
+        
+        // Maintain focus on the input field after sending a message
+        if (shouldMaintainFocus)
+        {
+            ImGui.SetKeyboardFocusHere(-1); // Focus the input field (1 item back)
         }
 
         // Handle Escape key to clear input

@@ -22,9 +22,13 @@ public sealed class DMSectionWindow : Window
     
     // Independent input field for DM section window
     private string _dmSectionInput = string.Empty;
+    private bool _dmSectionInputFocused = false;
     
     // Independent tab tracking for DM section (don't interfere with main window)
     private int _activeDMTabIndex = -1;
+    private bool _forceTabSelection = false;
+    private bool _focusInputField = false;
+    private bool _maintainInputFocus = false;
 
     public DMSectionWindow(Plugin plugin, ChatLogWindow chatLogWindow) 
         : base($"Direct Messages###dm-section-window")
@@ -52,6 +56,40 @@ public sealed class DMSectionWindow : Window
         
         // Conditionally show title bar based on collapse buttons setting
         UpdateTitleBarVisibility();
+    }
+
+    /// <summary>
+    /// Sets the active DM tab in the DM Section Window.
+    /// </summary>
+    /// <param name="dmTab">The DM tab to make active</param>
+    internal void SetActiveTab(DMTab dmTab)
+    {
+        if (dmTab == null)
+            return;
+
+        try
+        {
+            // Find the index of this DM tab in the configuration
+            if (Plugin.Config?.Tabs != null)
+            {
+                var tabIndex = Plugin.Config.Tabs.IndexOf(dmTab);
+                if (tabIndex >= 0)
+                {
+                    _activeDMTabIndex = tabIndex;
+                    _forceTabSelection = true;
+                    _focusInputField = true;
+                    Plugin.Log.Info($"DMSectionWindow.SetActiveTab: Set active tab index to {tabIndex} for {dmTab.Player.DisplayName}");
+                }
+                else
+                {
+                    Plugin.Log.Warning($"DMSectionWindow.SetActiveTab: Could not find tab index for {dmTab.Player.DisplayName}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"DMSectionWindow.SetActiveTab: Failed to set active tab: {ex.Message}");
+        }
     }
 
     public override bool DrawConditions()
@@ -180,6 +218,13 @@ public sealed class DMSectionWindow : Window
                 
                 var flags = ImGuiTabItemFlags.None;
                 
+                // CRITICAL FIX: If this tab should be active based on _activeDMTabIndex, force it to be selected
+                if (_forceTabSelection && _activeDMTabIndex == tabIndex)
+                {
+                    flags |= ImGuiTabItemFlags.SetSelected;
+                    Plugin.Log.Info($"DMSectionWindow: Forcing tab {tabIndex} ({dmTab.Player.Name}) to be selected");
+                }
+                
                 using var tabItem = ImRaii.TabItem($"{tabLabel}###dm-section-tab-{tabIndex}", flags);
                 
                 if (tabItem.Success)
@@ -187,9 +232,12 @@ public sealed class DMSectionWindow : Window
                     activeTabIndex = tabIndex;
                     activeTab = dmTab;
                     
-                    // CRITICAL FIX: Use our own tab tracking instead of interfering with Plugin.LastTab
-                    // This was causing the main chat window to think tabs were constantly switching
-                    _activeDMTabIndex = tabIndex;
+                    // CRITICAL FIX: Only update _activeDMTabIndex if we're not forcing a selection
+                    // When forcing selection, we want to keep the target index until the force is applied
+                    if (!_forceTabSelection)
+                    {
+                        _activeDMTabIndex = tabIndex;
+                    }
                     
                     // Clear unread for this DM tab
                     dmTab.Unread = 0;
@@ -199,6 +247,13 @@ public sealed class DMSectionWindow : Window
                 // Add context menu for DM tabs
                 DrawDMTabContextMenu(dmTab, tabIndex);
             }
+        }
+
+        // Reset the force selection flag after processing
+        if (_forceTabSelection)
+        {
+            _forceTabSelection = false;
+            Plugin.Log.Info($"DMSectionWindow: Reset force tab selection flag");
         }
 
         // Draw the content of the active tab (buttons are now integrated into the content layout)
@@ -317,8 +372,30 @@ public sealed class DMSectionWindow : Window
             // Track if we should maintain focus
             var shouldMaintainFocus = false;
             
-            // Use independent input field for DM section window
-            var inputResult = ImGui.InputTextWithHint("##dm-section-input", placeholder, ref _dmSectionInput, 500, inputFlags);
+            // CRITICAL FIX: Focus input field when tab is focused via "Focus DM" OR maintain focus after sending
+            if (_focusInputField || _maintainInputFocus)
+            {
+                ImGui.SetKeyboardFocusHere();
+                _focusInputField = false;
+                _maintainInputFocus = false;
+                Plugin.Log.Info($"DMSectionWindow: Focused input field for DM tab");
+            }
+            
+            // Enhanced input field with better visual feedback (same as main chat and DM windows)
+            var isCommand = _dmSectionInput.StartsWith('/');
+            var hasError = isCommand && !ChatLogWindow.IsValidCommand(_dmSectionInput.Split(' ')[0]);
+            var (styleScope, colorScope) = ModernUI.PushEnhancedInputStyle(Plugin.Config, _dmSectionInputFocused, hasError);
+            
+            bool inputResult;
+            using (styleScope)
+            using (colorScope)
+            {
+                // Use independent input field for DM section window
+                inputResult = ImGui.InputTextWithHint("##dm-section-input", placeholder, ref _dmSectionInput, 500, inputFlags);
+            }
+            
+            var inputActive = ImGui.IsItemActive();
+            _dmSectionInputFocused = inputActive;
             
             if (inputResult && !string.IsNullOrWhiteSpace(_dmSectionInput))
             {
@@ -327,7 +404,7 @@ public sealed class DMSectionWindow : Window
                 Plugin.DMMessageRouter.TrackOutgoingTell(dmTab.Player);
                 ChatBox.SendMessage(tellCommand);
                 _dmSectionInput = string.Empty;
-                shouldMaintainFocus = true; // Maintain focus after sending
+                _maintainInputFocus = true; // Maintain focus after sending
             }
             
             ImGui.SameLine();
@@ -342,13 +419,7 @@ public sealed class DMSectionWindow : Window
                 Plugin.DMMessageRouter.TrackOutgoingTell(dmTab.Player);
                 ChatBox.SendMessage(tellCommand);
                 _dmSectionInput = string.Empty;
-                shouldMaintainFocus = true; // Maintain focus after sending
-            }
-            
-            // Maintain focus on the input field after sending a message
-            if (shouldMaintainFocus)
-            {
-                ImGui.SetKeyboardFocusHere(-2); // Focus the input field (2 items back: send button, input field)
+                _maintainInputFocus = true; // Maintain focus after sending
             }
         }
     }

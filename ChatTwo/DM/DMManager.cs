@@ -1511,7 +1511,20 @@ internal class DMManager
                 if (tabIndex >= 0)
                 {
                     _plugin.WantedTab = tabIndex;
-                    Plugin.Log.Debug($"FocusDMTab: Set WantedTab to {tabIndex} for {dmTab.Player.DisplayName}");
+                    Plugin.Log.Info($"FocusDMTab: Set WantedTab to {tabIndex} for {dmTab.Player.DisplayName}");
+                    
+                    // CRITICAL FIX: If DM Section is popped out, also set the active tab in the DM Section Window
+                    if (Plugin.Config.DMSectionPoppedOut && _plugin.DMSectionWindow != null)
+                    {
+                        _plugin.DMSectionWindow.SetActiveTab(dmTab);
+                        Plugin.Log.Info($"FocusDMTab: Also set active tab in DM Section Window for {dmTab.Player.DisplayName}");
+                    }
+                    else
+                    {
+                        // DM Section is not popped out, focus input in main chat window
+                        _plugin.ChatLogWindow.Activate = true;
+                        Plugin.Log.Info($"FocusDMTab: Set Activate=true for main chat window for {dmTab.Player.DisplayName}");
+                    }
                 }
                 else
                 {
@@ -1648,7 +1661,18 @@ internal class DMManager
         {
             var player = new DMPlayer(playerName, worldId);
             
-            Plugin.Log.Debug($"FocusExistingDMInterface: Checking for existing DM interface for {player.DisplayName}");
+            Plugin.Log.Info($"FocusExistingDMInterface: Checking for existing DM interface for {player.DisplayName}");
+            Plugin.Log.Info($"FocusExistingDMInterface: Looking for player - Name: '{playerName}', WorldId: {worldId}");
+            
+            // DEBUG: Log all currently tracked DM tabs
+            Plugin.Log.Info($"FocusExistingDMInterface: Currently tracked DM tabs ({_openTabs.Count}):");
+            foreach (var kvp in _openTabs)
+            {
+                var trackedPlayer = kvp.Key;
+                var trackedTab = kvp.Value;
+                Plugin.Log.Info($"  - Tracked: '{trackedPlayer.Name}' (World: {trackedPlayer.HomeWorld}, ContentId: {trackedPlayer.ContentId}) -> Tab: {trackedTab.Name}");
+                Plugin.Log.Info($"    Equals check: {player.Equals(trackedPlayer)}");
+            }
             
             // CRITICAL FIX: Clean up stale references BEFORE checking for existing interfaces
             // This prevents the "Focus Existing DM" issue when windows/tabs were closed but not properly cleaned up
@@ -1665,6 +1689,7 @@ internal class DMManager
                 {
                     Plugin.Log.Info($"FocusExistingDMInterface: Focusing existing open window for {player.DisplayName}");
                     existingWindow.BringToFront();
+                    existingWindow.Activate = true; // Focus the input field
                     return true;
                 }
                 else

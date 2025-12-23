@@ -4,18 +4,21 @@ using System.Globalization;
 using System.Numerics;
 using ChatTwo.Code;
 using ChatTwo.DM;
+using ChatTwo.GameFunctions.Types;
 using ChatTwo.Http;
 using ChatTwo.Ipc;
 using ChatTwo.Resources;
 using ChatTwo.Ui;
 using ChatTwo.Util;
 using Dalamud.Game.ClientState.Conditions;
+using Dalamud.Game.ClientState.Keys;
 using Dalamud.Game.ClientState.Objects;
 using Dalamud.Interface.Windowing;
 using Dalamud.IoC;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using Dalamud.Bindings.ImGui;
+using FFXIVClientStructs.FFXIV.Client.UI;
 
 namespace ChatTwo;
 
@@ -69,6 +72,7 @@ public sealed class Plugin : IDalamudPlugin
 
     internal int DeferredSaveFrames = -1;
     private bool _needsDMTabConversion = false;
+    private bool _wasEnterPressed = false;
 
     internal DateTime GameStarted { get; }
 
@@ -1680,12 +1684,112 @@ public sealed class Plugin : IDalamudPlugin
             FixDeserializedDMTabs();
         }
 
+        // GLOBAL ENTER KEY FIX: Handle global Enter key when KeybindManager can't due to DM windows
+        // This fixes the issue where global Enter key doesn't work when DM windows/tabs are open
+        // DISABLED: Fixed the root cause in KeybindManager instead
+        // try
+        // {
+        //     HandleGlobalEnterKeyFallback();
+        // }
+        // catch (Exception ex)
+        // {
+        //     Log.Error($"FrameworkUpdate: Error in HandleGlobalEnterKeyFallback: {ex.Message}");
+        // }
+
         if (!Config.HideChat)
             return;
 
         foreach (var name in ChatAddonNames)
             if (GameFunctions.GameFunctions.IsAddonInteractable(name))
                 GameFunctions.GameFunctions.SetAddonInteractable(name, false);
+    }
+
+    private static int _globalEnterCallCount = 0;
+
+    /// <summary>
+    /// Fallback handler for global Enter key when the main KeybindManager can't handle it.
+    /// This specifically addresses the issue where DM windows prevent global Enter key from working.
+    /// </summary>
+    private unsafe void HandleGlobalEnterKeyFallback()
+    {
+        try
+        {
+            // BASIC TEST: Just log that we're being called
+            _globalEnterCallCount++;
+            if (_globalEnterCallCount % 300 == 0) // Log every 5 seconds at 60fps
+            {
+                Log.Info($"HandleGlobalEnterKeyFallback: Method is being called (call #{_globalEnterCallCount})");
+            }
+
+            // Check if Enter key was just pressed (not held down)
+            var enterPressed = KeyState[VirtualKey.RETURN];
+            if (!enterPressed || _wasEnterPressed)
+            {
+                _wasEnterPressed = enterPressed;
+                return;
+            }
+            _wasEnterPressed = true;
+
+            Log.Info("HandleGlobalEnterKeyFallback: Enter key pressed, checking conditions...");
+
+            // Only handle this if we're in a state where we should be able to open chat
+            if (CutsceneActive || GposeActive || !ClientState.IsLoggedIn)
+            {
+                Log.Info("HandleGlobalEnterKeyFallback: Skipping due to cutscene/gpose/not logged in");
+                return;
+            }
+
+            // CRITICAL: Check if we have DM Windows open
+            // DM Windows can cause the KeybindManager to think text input is active even when it's not
+            var dmWindows = DMManager.Instance.GetOpenDMWindows().ToList();
+            var hasDMWindows = dmWindows.Any(w => w.IsOpen);
+
+            Log.Info($"HandleGlobalEnterKeyFallback: Found {dmWindows.Count} DM windows, {dmWindows.Count(w => w.IsOpen)} are open");
+
+            // Check if the vanilla text input is active (game's own chat, etc.)
+            var vanillaTextActive = RaptureAtkModule.Instance()->AtkModule.IsTextInputActive();
+            
+            // Check if any ChatTwo input field currently has focus
+            var chatTwoHasFocus = false;
+
+            // Check main chat window input
+            if (ChatLogWindow?.InputFocused == true)
+            {
+                chatTwoHasFocus = true;
+            }
+
+            // SIMPLIFIED LOGIC: If we have DM windows and no ChatTwo input has focus, activate main chat
+            // Remove the conservative vanilla text check for now to see if it works
+            Log.Info($"HandleGlobalEnterKeyFallback: hasDMWindows={hasDMWindows}, vanillaTextActive={vanillaTextActive}, chatTwoHasFocus={chatTwoHasFocus}");
+
+            if (hasDMWindows && !chatTwoHasFocus)
+            {
+                Log.Info("HandleGlobalEnterKeyFallback: DM windows present and no ChatTwo input focused, activating main chat");
+                
+                // Use the same activation logic as the KeybindManager
+                try
+                {
+                    var channelSwitchInfo = new ChannelSwitchInfo(null); // CMD_CHAT equivalent
+                    ChatLogWindow.Activated(new ChatActivatedArgs(channelSwitchInfo));
+                    Log.Info("HandleGlobalEnterKeyFallback: Successfully called ChatLogWindow.Activated");
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning($"HandleGlobalEnterKeyFallback: Error in chat activation: {ex.Message}");
+                    // Fallback to simple activation
+                    ChatLogWindow.Activate = true;
+                    Log.Info("HandleGlobalEnterKeyFallback: Used fallback ChatLogWindow.Activate = true");
+                }
+            }
+            else
+            {
+                Log.Info($"HandleGlobalEnterKeyFallback: Not activating main chat - hasDMWindows={hasDMWindows}, chatTwoHasFocus={chatTwoHasFocus}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"HandleGlobalEnterKeyFallback: Error handling global Enter key fallback: {ex.Message}");
+        }
     }
 
     public static bool InBattle => Condition[ConditionFlag.InCombat];

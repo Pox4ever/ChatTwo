@@ -725,8 +725,9 @@ public sealed class ChatLogWindow : Window
             var isChatEnabled = activeTab is { InputDisabled: false };
             // CRITICAL FIX: Don't set keyboard focus when DM windows are active to prevent focus fights
             // This was causing the "has focus now" -> "lost focus" cycle that breaks context menus
+            // EXCEPTION: Allow focus when Activate is true (from global Enter key) even with DM windows open
             var hasDMWindows = DMManager.Instance.GetOpenDMWindows().Any();
-            if (isChatEnabled && (Activate || FocusedPreview) && !hasDMWindows)
+            if (isChatEnabled && (Activate || (FocusedPreview && !hasDMWindows)))
             {
                 FocusedPreview = false;
                 ImGui.SetKeyboardFocusHere();
@@ -924,8 +925,9 @@ public sealed class ChatLogWindow : Window
             var isChatEnabled = activeTab is { InputDisabled: false };
             // CRITICAL FIX: Don't set keyboard focus when DM windows are active to prevent focus fights
             // This was causing the "has focus now" -> "lost focus" cycle that breaks context menus
+            // EXCEPTION: Allow focus when Activate is true (from global Enter key) even with DM windows open
             var hasDMWindows = DMManager.Instance.GetOpenDMWindows().Any();
-            if (isChatEnabled && (Activate || FocusedPreview) && !hasDMWindows)
+            if (isChatEnabled && (Activate || (FocusedPreview && !hasDMWindows)))
             {
                 FocusedPreview = false;
                 ImGui.SetKeyboardFocusHere();
@@ -1274,6 +1276,10 @@ public sealed class ChatLogWindow : Window
                 }
                 
                 Chat = string.Empty;
+                if (Plugin.Config.KeepInputFocus)
+                {
+                    Activate = true; // Maintain focus after sending DM message
+                }
                 return;
             }
 
@@ -1365,6 +1371,10 @@ public sealed class ChatLogWindow : Window
 
                 activeTab.CurrentChannel.ResetTempChannel();
                 Chat = string.Empty;
+                if (Plugin.Config.KeepInputFocus)
+                {
+                    Activate = true; // Maintain focus after sending tell
+                }
                 return;
             }
 
@@ -1384,6 +1394,10 @@ public sealed class ChatLogWindow : Window
 
                         activeTab.CurrentChannel.ResetTempChannel();
                         Chat = string.Empty;
+                        if (Plugin.Config.KeepInputFocus)
+                        {
+                            Activate = true; // Maintain focus after sending tell
+                        }
                         return;
                     }
 
@@ -1402,6 +1416,10 @@ public sealed class ChatLogWindow : Window
 
                     activeTab.CurrentChannel.ResetTempChannel();
                     Chat = string.Empty;
+                    if (Plugin.Config.KeepInputFocus)
+                    {
+                        Activate = true; // Maintain focus after sending tell
+                    }
                     return;
                 }
 
@@ -1419,6 +1437,10 @@ public sealed class ChatLogWindow : Window
 
         activeTab.CurrentChannel.ResetTempChannel();
         Chat = string.Empty;
+        if (Plugin.Config.KeepInputFocus)
+        {
+            Activate = true; // Maintain focus after sending message
+        }
     }
 
     /// <summary>
