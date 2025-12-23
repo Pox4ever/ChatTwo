@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Numerics;
 using ChatTwo.Code;
 using ChatTwo.DM;
 using ChatTwo.Http;
@@ -114,6 +115,14 @@ public sealed class Plugin : IDalamudPlugin
             // Initialize DMManager with Plugin instance
             DMManager.Instance.Initialize(this);
             
+            // Clean up any stale DM references from previous sessions
+            // This prevents "Focus Existing DM" issues after plugin reload
+            DMManager.Instance.CleanupStaleReferences();
+            
+            // CRITICAL FIX: Restore existing DM tabs after cleanup
+            // This ensures that DM tabs that were open before plugin reload are properly tracked
+            DMManager.Instance.RestoreExistingDMTabs();
+            
             // Mark that we need to fix DM tabs on the first frame update (when we're on main thread)
             _needsDMTabConversion = true;
             
@@ -203,6 +212,27 @@ public sealed class Plugin : IDalamudPlugin
         Framework.Update -= FrameworkUpdate;
         GameFunctions.GameFunctions.SetChatInteractable(true);
 
+        // Clean up all DM windows before removing all windows
+        DMManager.Instance.CleanupAllDMWindows();
+        
+        // Also ensure DM Section Window is removed
+        if (DMSectionWindow != null)
+        {
+            DMSectionWindow.IsOpen = false;
+            try
+            {
+                // Check if the window is actually registered before trying to remove it
+                if (WindowSystem?.Windows.Contains(DMSectionWindow) == true)
+                {
+                    WindowSystem?.RemoveWindow(DMSectionWindow);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning($"Failed to remove DM Section Window from WindowSystem during disposal: {ex.Message}");
+            }
+        }
+
         WindowSystem?.RemoveAllWindows();
         ChatLogWindow?.Dispose();
         DbViewer?.Dispose();
@@ -291,6 +321,45 @@ public sealed class Plugin : IDalamudPlugin
                     DebugCleanupDuplicateDMTabs();
                     break;
                     
+                case "aggressive":
+                    Plugin.Log.Info("Debug: Running aggressive DM cleanup");
+                    DMManager.Instance.AggressiveCleanupAllDMTabs();
+                    break;
+                    
+                case "stale":
+                    Plugin.Log.Info("Debug: Running stale reference cleanup");
+                    DMManager.Instance.CleanupStaleReferences();
+                    break;
+                    
+                case "debug":
+                case "show":
+                    Plugin.Log.Info("Debug: Showing current DM state");
+                    DebugShowDMState();
+                    break;
+                    
+                case "window":
+                case "dmwindow":
+                    Plugin.Log.Info("Debug: Checking DM Section Window state");
+                    DebugDMSectionWindowState();
+                    break;
+                    
+                case "restore":
+                    Plugin.Log.Info("Debug: Manually triggering DM tab restoration");
+                    DMManager.Instance.RestoreExistingDMTabs();
+                    break;
+                    
+                case "reloadplugin":
+                case "plugin":
+                    Plugin.Log.Info("Debug: Plugin reload requested");
+                    DebugShowReloadInstructions();
+                    break;
+                    
+                case "force":
+                case "remove":
+                    Plugin.Log.Info("Debug: Force removing all DM tabs");
+                    DebugForceRemoveAllDMTabs();
+                    break;
+                    
                 default:
                     Plugin.Log.Info("Debug DM Commands:");
                     Plugin.Log.Info("  /chat2debugdm convert - Trigger DM tab conversion");
@@ -298,6 +367,13 @@ public sealed class Plugin : IDalamudPlugin
                     Plugin.Log.Info("  /chat2debugdm test - Run DM conversion test");
                     Plugin.Log.Info("  /chat2debugdm reload - Reload history for current DM tab");
                     Plugin.Log.Info("  /chat2debugdm cleanup - Clean up duplicate DM tabs");
+                    Plugin.Log.Info("  /chat2debugdm aggressive - Run aggressive DM cleanup");
+                    Plugin.Log.Info("  /chat2debugdm stale - Run stale reference cleanup");
+                    Plugin.Log.Info("  /chat2debugdm debug - Show current DM state");
+                    Plugin.Log.Info("  /chat2debugdm window - Debug DM Section Window state");
+                    Plugin.Log.Info("  /chat2debugdm restore - Manually restore existing DM tabs");
+                    Plugin.Log.Info("  /chat2debugdm plugin - Show plugin reload instructions");
+                    Plugin.Log.Info("  /chat2debugdm force - Force remove all DM tabs");
                     break;
             }
         }
@@ -343,6 +419,211 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
+    /// <summary>
+    /// Shows instructions for reloading the plugin.
+    /// </summary>
+    private void DebugShowReloadInstructions()
+    {
+        try
+        {
+            Plugin.Log.Info("=== PLUGIN RELOAD INSTRUCTIONS ===");
+            Plugin.Log.Info("To reload ChatTwo plugin, use one of these commands:");
+            Plugin.Log.Info("  /xlplugins reload ChatTwo");
+            Plugin.Log.Info("  /xlplugins reload \"(Pox4eveR) Chat 2\"");
+            Plugin.Log.Info("");
+            Plugin.Log.Info("Alternative methods:");
+            Plugin.Log.Info("  1. Open Plugin Installer (/xlplugins)");
+            Plugin.Log.Info("  2. Find ChatTwo in the list");
+            Plugin.Log.Info("  3. Click the reload button");
+            Plugin.Log.Info("");
+            Plugin.Log.Info("After reload, your DM tabs should automatically reappear!");
+            Plugin.Log.Info("=== END RELOAD INSTRUCTIONS ===");
+            
+            // Also show a chat message for convenience
+            try
+            {
+                var reloadMessage = Message.FakeMessage(
+                    new List<Chunk>
+                    {
+                        new TextChunk(ChunkSource.None, null, "[ChatTwo] To reload plugin: "),
+                        new TextChunk(ChunkSource.None, null, "/xlplugins reload ChatTwo")
+                    },
+                    new ChatCode((ushort)ChatType.System)
+                );
+                
+                // Add to current tab if available
+                var currentTab = CurrentTab;
+                if (currentTab != null)
+                {
+                    currentTab.AddMessage(reloadMessage, unread: false);
+                }
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.Warning($"Failed to show reload message in chat: {ex.Message}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"DebugShowReloadInstructions: Error: {ex.Message}");
+        }
+    }
+    
+    /// <summary>
+    /// Debug method to show the current DM Section Window state.
+    /// </summary>
+    private void DebugDMSectionWindowState()
+    {
+        try
+        {
+            Plugin.Log.Info("=== DEBUG DM SECTION WINDOW STATE ===");
+            
+            if (DMSectionWindow == null)
+            {
+                Plugin.Log.Info("DMSectionWindow: NULL");
+                return;
+            }
+            
+            Plugin.Log.Info($"DMSectionWindow.IsOpen: {DMSectionWindow.IsOpen}");
+            Plugin.Log.Info($"DMSectionWindow.Collapsed: {DMSectionWindow.Collapsed}");
+            Plugin.Log.Info($"DMSectionWindow.Position: {DMSectionWindow.Position}");
+            Plugin.Log.Info($"DMSectionWindow.Size: {DMSectionWindow.Size}");
+            Plugin.Log.Info($"DMSectionWindow.Flags: {DMSectionWindow.Flags}");
+            
+            // Check if it's in WindowSystem
+            var isInWindowSystem = WindowSystem?.Windows.Contains(DMSectionWindow) == true;
+            Plugin.Log.Info($"DMSectionWindow in WindowSystem: {isInWindowSystem}");
+            
+            if (WindowSystem != null)
+            {
+                Plugin.Log.Info($"Total windows in WindowSystem: {WindowSystem.Windows.Count}");
+                foreach (var window in WindowSystem.Windows)
+                {
+                    Plugin.Log.Info($"  - Window: {window.WindowName} (IsOpen: {window.IsOpen})");
+                }
+            }
+            
+            // Force the window to be visible and reset position
+            Plugin.Log.Info("Forcing DM Section Window to be visible and resetting position...");
+            DMSectionWindow.IsOpen = true;
+            DMSectionWindow.Position = new Vector2(100, 100);
+            DMSectionWindow.Size = new Vector2(400, 300);
+            
+            // Ensure it's in WindowSystem
+            if (WindowSystem != null && !WindowSystem.Windows.Contains(DMSectionWindow))
+            {
+                WindowSystem.AddWindow(DMSectionWindow);
+                Plugin.Log.Info("Added DM Section Window to WindowSystem");
+            }
+            
+            Plugin.Log.Info("=== END DEBUG DM SECTION WINDOW STATE ===");
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"DebugDMSectionWindowState: Error: {ex.Message}");
+        }
+    }
+    
+    /// <summary>
+    /// Debug method to show the current DM state for troubleshooting.
+    /// </summary>
+    private void DebugShowDMState()
+    {
+        try
+        {
+            Plugin.Log.Info("=== DEBUG DM STATE ===");
+            
+            var dmManager = DMManager.Instance;
+            
+            Plugin.Log.Info($"DMSectionPoppedOut: {Config.DMSectionPoppedOut}");
+            Plugin.Log.Info($"DMSectionWindow IsOpen: {DMSectionWindow?.IsOpen}");
+            
+            // Show all tabs in configuration
+            Plugin.Log.Info($"Total tabs in config: {Config.Tabs.Count}");
+            var dmTabsInConfig = Config.Tabs.OfType<DMTab>().ToList();
+            Plugin.Log.Info($"DM tabs in config: {dmTabsInConfig.Count}");
+            
+            foreach (var dmTab in dmTabsInConfig)
+            {
+                Plugin.Log.Info($"  Config DM Tab: {dmTab.Player.DisplayName} (PopOut: {dmTab.PopOut})");
+            }
+            
+            // Show tracking state
+            var openTabs = dmManager.GetOpenDMTabs().ToList();
+            var openWindows = dmManager.GetOpenDMWindows().ToList();
+            
+            Plugin.Log.Info($"Tracked DM tabs: {openTabs.Count}");
+            foreach (var tab in openTabs)
+            {
+                Plugin.Log.Info($"  Tracked Tab: {tab.Player.DisplayName}");
+            }
+            
+            Plugin.Log.Info($"Tracked DM windows: {openWindows.Count}");
+            foreach (var window in openWindows)
+            {
+                Plugin.Log.Info($"  Tracked Window: {window.DMTab.Player.DisplayName} (IsOpen: {window.IsOpen})");
+            }
+            
+            // Check what tabs would be shown in DM Section Window
+            if (Config.DMSectionPoppedOut && DMSectionWindow?.IsOpen == true)
+            {
+                var dmTabsForSection = Config.Tabs
+                    .Where(tab => !tab.PopOut && tab is DMTab)
+                    .Cast<DMTab>()
+                    .ToList();
+                    
+                Plugin.Log.Info($"Tabs that should be in DM Section Window: {dmTabsForSection.Count}");
+                foreach (var tab in dmTabsForSection)
+                {
+                    Plugin.Log.Info($"  DM Section Tab: {tab.Player.DisplayName}");
+                }
+            }
+            
+            Plugin.Log.Info("=== END DEBUG DM STATE ===");
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"DebugShowDMState: Error: {ex.Message}");
+        }
+    }
+    
+    /// <summary>
+    /// Debug method to force remove all DM tabs regardless of state.
+    /// </summary>
+    private void DebugForceRemoveAllDMTabs()
+    {
+        try
+        {
+            Plugin.Log.Info("DebugForceRemoveAllDMTabs: Force removing all DM tabs");
+            
+            var dmTabsToRemove = Config.Tabs.OfType<DMTab>().ToList();
+            Plugin.Log.Info($"DebugForceRemoveAllDMTabs: Found {dmTabsToRemove.Count} DM tabs to remove");
+            
+            foreach (var dmTab in dmTabsToRemove)
+            {
+                Plugin.Log.Info($"DebugForceRemoveAllDMTabs: Removing DM tab for {dmTab.Player.DisplayName}");
+                Config.Tabs.Remove(dmTab);
+                
+                // Also remove from DMManager tracking
+                DMManager.Instance.ForceCleanupPlayer(dmTab.Player);
+            }
+            
+            if (dmTabsToRemove.Count > 0)
+            {
+                SaveConfig();
+                Plugin.Log.Info($"DebugForceRemoveAllDMTabs: Removed {dmTabsToRemove.Count} DM tabs and saved config");
+            }
+            else
+            {
+                Plugin.Log.Info("DebugForceRemoveAllDMTabs: No DM tabs found to remove");
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"DebugForceRemoveAllDMTabs: Error: {ex.Message}");
+        }
+    }
+    
     /// <summary>
     /// Debug method to clean up duplicate DM tabs for the same player.
     /// </summary>
@@ -778,6 +1059,13 @@ public sealed class Plugin : IDalamudPlugin
                 {
                     Plugin.Log.Info("PerformTabConversion: Forcing DM Section Window refresh");
                     DMSectionWindow.IsOpen = true; // Ensure it's marked as open
+                    
+                    // CRITICAL FIX: Ensure the DM Section Window is properly registered in WindowSystem
+                    if (WindowSystem != null && !WindowSystem.Windows.Contains(DMSectionWindow))
+                    {
+                        WindowSystem.AddWindow(DMSectionWindow);
+                        Plugin.Log.Info("PerformTabConversion: Added DM Section Window to WindowSystem after tab conversion");
+                    }
                 }
             }
             catch (Exception ex)

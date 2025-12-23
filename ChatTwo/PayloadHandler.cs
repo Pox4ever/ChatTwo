@@ -709,6 +709,11 @@ public sealed class PayloadHandler
             // Check if a DM interface already exists for this player (without focusing it)
             var dmManager = ChatTwo.DM.DMManager.Instance;
             var dmPlayer = new ChatTwo.DM.DMPlayer(player.PlayerName, world.RowId);
+            
+            // CRITICAL FIX: Clean up stale references before checking for existing DM interfaces
+            // This prevents showing "Focus Existing DM" when the DM was actually closed
+            dmManager.CleanupStaleReferences();
+            
             var hasExistingWindow = dmManager.HasOpenDMWindow(dmPlayer);
             var hasExistingTab = dmManager.HasOpenDMTab(dmPlayer);
             var hasExistingDM = hasExistingWindow || hasExistingTab;

@@ -247,6 +247,25 @@ internal class DMManager
                 {
                     dmWindow.IsOpen = false;
                 }
+                
+                // CRITICAL FIX: Remove the window from the WindowSystem to prevent FFXIV from trying to activate it
+                if (_plugin?.WindowSystem != null)
+                {
+                    try
+                    {
+                        // Check if the window is actually registered before trying to remove it
+                        if (_plugin.WindowSystem.Windows.Contains(dmWindow))
+                        {
+                            _plugin.WindowSystem.RemoveWindow(dmWindow);
+                            Plugin.Log.Debug($"Removed DM window for {player.DisplayName} from WindowSystem");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Plugin.Log.Warning($"Failed to remove DM window from WindowSystem: {ex.Message}");
+                    }
+                }
+                
                 return true;
             }
             return false;
@@ -312,14 +331,15 @@ internal class DMManager
             
         if (_openWindows.TryGetValue(player, out var window))
         {
-            // Check if the window is actually open
-            if (window.IsOpen)
+            // Check if the window is actually open AND registered in WindowSystem
+            if (window.IsOpen && _plugin?.WindowSystem?.Windows.Contains(window) == true)
             {
                 return true;
             }
             else
             {
-                // Window exists but is closed, remove it from tracking
+                // Window exists but is closed or not properly registered, remove it from tracking
+                Plugin.Log.Debug($"HasOpenDMWindow: Removing stale window reference for {player.DisplayName}");
                 _openWindows.TryRemove(player, out _);
                 return false;
             }
@@ -357,6 +377,7 @@ internal class DMManager
             else
             {
                 // Tab exists in tracking but not in config, remove it from tracking
+                Plugin.Log.Debug($"HasOpenDMTab: Removing stale tab reference for {player.DisplayName}");
                 _openTabs.TryRemove(player, out _);
                 return false;
             }
@@ -373,71 +394,6 @@ internal class DMManager
     public bool HasOpenDM(DMPlayer player)
     {
         return HasOpenDMTab(player) || HasOpenDMWindow(player);
-    }
-    
-    /// <summary>
-    /// Cleans up stale DM window and tab references.
-    /// This should be called when settings change that affect DM visibility.
-    /// </summary>
-    public void CleanupStaleReferences()
-    {
-        try
-        {
-            Plugin.Log.Debug("CleanupStaleReferences: Starting cleanup of stale DM references");
-            
-            // Clean up closed windows
-            var staleWindows = new List<DMPlayer>();
-            foreach (var kvp in _openWindows)
-            {
-                if (!kvp.Value.IsOpen)
-                {
-                    staleWindows.Add(kvp.Key);
-                    Plugin.Log.Debug($"CleanupStaleReferences: Found stale window for {kvp.Key.DisplayName}");
-                }
-            }
-            
-            foreach (var player in staleWindows)
-            {
-                _openWindows.TryRemove(player, out _);
-                Plugin.Log.Debug($"CleanupStaleReferences: Removed stale window for {player.DisplayName}");
-            }
-            
-            // Clean up tabs that are no longer in the config
-            var staleTabs = new List<DMPlayer>();
-            if (Plugin.Config?.Tabs != null)
-            {
-                foreach (var kvp in _openTabs)
-                {
-                    var playerExists = false;
-                    foreach (var tab in Plugin.Config.Tabs)
-                    {
-                        if (tab is DMTab dmTab && dmTab.Player.Equals(kvp.Key))
-                        {
-                            playerExists = true;
-                            break;
-                        }
-                    }
-                    
-                    if (!playerExists)
-                    {
-                        staleTabs.Add(kvp.Key);
-                        Plugin.Log.Debug($"CleanupStaleReferences: Found stale tab for {kvp.Key.DisplayName}");
-                    }
-                }
-                
-                foreach (var player in staleTabs)
-                {
-                    _openTabs.TryRemove(player, out _);
-                    Plugin.Log.Debug($"CleanupStaleReferences: Removed stale tab for {player.DisplayName}");
-                }
-            }
-            
-            Plugin.Log.Debug($"CleanupStaleReferences: Cleanup complete. Removed {staleWindows.Count} windows and {staleTabs.Count} tabs");
-        }
-        catch (Exception ex)
-        {
-            Plugin.Log.Error($"CleanupStaleReferences: Error during cleanup: {ex.Message}");
-        }
     }
     
     /// <summary>
@@ -812,13 +768,18 @@ internal class DMManager
             // Ensure the DM Section Window is visible if DM section is popped out
             if (Plugin.Config.DMSectionPoppedOut)
             {
-                Plugin.Log.Debug($"OpenDMTab: DM section is popped out, ensuring DMSectionWindow is visible");
                 var dmSectionWindow = _plugin.DMSectionWindow;
                 if (dmSectionWindow != null)
                 {
                     // Make sure the window is open and will be drawn
                     dmSectionWindow.IsOpen = true;
-                    Plugin.Log.Debug($"OpenDMTab: Set DMSectionWindow.IsOpen = true");
+                    
+                    // CRITICAL FIX: Ensure the window is properly registered in WindowSystem
+                    if (_plugin.WindowSystem != null && !_plugin.WindowSystem.Windows.Contains(dmSectionWindow))
+                    {
+                        Plugin.Log.Info($"OpenDMTab: DMSectionWindow not in WindowSystem, adding it");
+                        _plugin.WindowSystem.AddWindow(dmSectionWindow);
+                    }
                 }
                 else
                 {
@@ -855,6 +816,39 @@ internal class DMManager
             {
                 // Remove from main configuration tabs list
                 Plugin.Config.Tabs.Remove(dmTab);
+                
+                // CRITICAL FIX: Save configuration and check if DM Section Window should be hidden
+                _plugin?.SaveConfig();
+                
+                // If there are no more DM tabs, ensure the DM Section Window is properly hidden
+                if (!HasAnyDMTabs())
+                {
+                    Plugin.Log.Debug("CloseDMTab: No more DM tabs, aggressively removing DM Section Window from WindowSystem");
+                    var dmSectionWindow = _plugin?.DMSectionWindow;
+                    if (dmSectionWindow != null)
+                    {
+                        dmSectionWindow.IsOpen = false;
+                        
+                        // Aggressively remove from WindowSystem
+                        if (_plugin?.WindowSystem != null)
+                        {
+                            try
+                            {
+                                // Check if the window is actually registered before trying to remove it
+                                if (_plugin.WindowSystem.Windows.Contains(dmSectionWindow))
+                                {
+                                    _plugin.WindowSystem.RemoveWindow(dmSectionWindow);
+                                    Plugin.Log.Debug("CloseDMTab: Removed DMSectionWindow from WindowSystem");
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Plugin.Log.Warning($"Failed to remove DM Section Window from WindowSystem: {ex.Message}");
+                            }
+                        }
+                    }
+                }
+                
                 return true;
             }
             return false;
@@ -1609,29 +1603,72 @@ internal class DMManager
         {
             var player = new DMPlayer(playerName, worldId);
             
-            // Check for existing DM window first
+            Plugin.Log.Debug($"FocusExistingDMInterface: Checking for existing DM interface for {player.DisplayName}");
+            
+            // CRITICAL FIX: Clean up stale references BEFORE checking for existing interfaces
+            // This prevents the "Focus Existing DM" issue when windows/tabs were closed but not properly cleaned up
+            CleanupStaleReferences();
+            
+            // ENHANCED CHECK: Only consider DM interfaces as "existing" if they are actually visible and usable
+            
+            // Check for existing DM window first - must be open AND registered in WindowSystem
             if (_openWindows.TryGetValue(player, out var existingWindow))
             {
-                // Only focus if the window is actually open
-                if (existingWindow.IsOpen)
+                Plugin.Log.Debug($"FocusExistingDMInterface: Found existing window for {player.DisplayName}, checking if open and registered");
+                
+                if (existingWindow.IsOpen && _plugin?.WindowSystem?.Windows.Contains(existingWindow) == true)
                 {
+                    Plugin.Log.Info($"FocusExistingDMInterface: Focusing existing open window for {player.DisplayName}");
                     existingWindow.BringToFront();
                     return true;
                 }
                 else
                 {
-                    // Window exists but is closed, remove it from tracking
+                    Plugin.Log.Debug($"FocusExistingDMInterface: Window exists but is closed or not in WindowSystem, removing from tracking");
+                    // Window exists but is closed or not properly registered, remove it from tracking
                     _openWindows.TryRemove(player, out _);
                 }
             }
             
-            // Check for existing DM tab
+            // Check for existing DM tab - must be in config AND DM Section Window must be open
             if (_openTabs.TryGetValue(player, out var existingTab))
             {
-                FocusDMTab(existingTab);
-                return true;
+                Plugin.Log.Debug($"FocusExistingDMInterface: Found existing tab for {player.DisplayName}, checking if in config and DM section is open");
+                
+                // CRITICAL FIX: Only consider the tab as "existing" if:
+                // 1. It's in the configuration
+                // 2. The DM Section Window is actually open (if it's not a popped-out tab)
+                // 3. OR it's a popped-out tab with an active window
+                
+                var isInConfig = Plugin.Config?.Tabs?.Contains(existingTab) == true;
+                var isDMSectionOpen = Plugin.Config.DMSectionPoppedOut && 
+                                     _plugin?.DMSectionWindow?.IsOpen == true;
+                var isPopOutWithWindow = existingTab.PopOut && 
+                                        _openWindows.TryGetValue(player, out var popOutWindow) && 
+                                        popOutWindow.IsOpen;
+                
+                Plugin.Log.Debug($"FocusExistingDMInterface: Tab analysis - InConfig: {isInConfig}, DMSectionOpen: {isDMSectionOpen}, PopOut: {existingTab.PopOut}, PopOutWithWindow: {isPopOutWithWindow}");
+                
+                if (isInConfig && (isDMSectionOpen || isPopOutWithWindow))
+                {
+                    Plugin.Log.Info($"FocusExistingDMInterface: Focusing existing tab for {player.DisplayName}");
+                    FocusDMTab(existingTab);
+                    return true;
+                }
+                else
+                {
+                    Plugin.Log.Info($"FocusExistingDMInterface: Tab exists but DM section is not open and no pop-out window, removing from tracking and config");
+                    // Tab exists but DM section is not open and no active window, remove it
+                    _openTabs.TryRemove(player, out _);
+                    if (isInConfig)
+                    {
+                        Plugin.Config.Tabs.Remove(existingTab);
+                        _plugin?.SaveConfig();
+                    }
+                }
             }
             
+            Plugin.Log.Debug($"FocusExistingDMInterface: No existing DM interface found for {player.DisplayName}");
             return false;
         }
         catch (Exception ex)
@@ -1640,5 +1677,334 @@ internal class DMManager
             return false;
         }
     }
-}
 
+    /// <summary>
+    /// Cleans up all open DM windows and removes them from the WindowSystem.
+    /// This should be called when the plugin is being disposed or when doing a full cleanup.
+    /// </summary>
+    public void CleanupAllDMWindows()
+    {
+        try
+        {
+            var windowsToClose = _openWindows.Values.ToList();
+            
+            foreach (var dmWindow in windowsToClose)
+            {
+                dmWindow.IsOpen = false;
+                
+                if (_plugin?.WindowSystem != null)
+                {
+                    try
+                    {
+                        // Check if the window is actually registered before trying to remove it
+                        if (_plugin.WindowSystem.Windows.Contains(dmWindow))
+                        {
+                            _plugin.WindowSystem.RemoveWindow(dmWindow);
+                            Plugin.Log.Debug($"Removed DM window for {dmWindow.DMTab.Player.DisplayName} from WindowSystem");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Plugin.Log.Warning($"Failed to remove DM window from WindowSystem: {ex.Message}");
+                    }
+                }
+            }
+            
+            _openWindows.Clear();
+            Plugin.Log.Info($"Cleaned up {windowsToClose.Count} DM windows from WindowSystem");
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to cleanup DM windows: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Restores existing DM tabs from configuration to tracking after plugin reload.
+    /// This ensures that DM tabs that were open before plugin reload are properly tracked and visible.
+    /// </summary>
+    public void RestoreExistingDMTabs()
+    {
+        try
+        {
+            if (Plugin.Config?.Tabs == null)
+            {
+                Plugin.Log.Debug("RestoreExistingDMTabs: No configuration or tabs available");
+                return;
+            }
+
+            var existingDMTabs = Plugin.Config.Tabs.OfType<DMTab>().ToList();
+            Plugin.Log.Info($"RestoreExistingDMTabs: Found {existingDMTabs.Count} existing DM tabs to restore");
+
+            foreach (var dmTab in existingDMTabs)
+            {
+                try
+                {
+                    // Add to tracking if not already tracked
+                    if (!_openTabs.ContainsKey(dmTab.Player))
+                    {
+                        _openTabs.TryAdd(dmTab.Player, dmTab);
+                        Plugin.Log.Info($"RestoreExistingDMTabs: Restored tracking for DM tab: {dmTab.Player.DisplayName}");
+                        
+                        // Ensure history exists
+                        GetOrCreateHistory(dmTab.Player);
+                        
+                        // Reinitialize the tab's history connection to DMManager
+                        dmTab.ReinitializeHistory();
+                    }
+                    else
+                    {
+                        Plugin.Log.Debug($"RestoreExistingDMTabs: DM tab already tracked: {dmTab.Player.DisplayName}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Plugin.Log.Error($"RestoreExistingDMTabs: Failed to restore DM tab for {dmTab.Player.DisplayName}: {ex.Message}");
+                }
+            }
+
+            // If we have DM tabs and DM section is popped out, ensure the DM Section Window is visible
+            if (existingDMTabs.Count > 0 && Plugin.Config.DMSectionPoppedOut)
+            {
+                var dmSectionWindow = _plugin?.DMSectionWindow;
+                if (dmSectionWindow != null)
+                {
+                    Plugin.Log.Info($"RestoreExistingDMTabs: Ensuring DM Section Window is visible for {existingDMTabs.Count} restored tabs");
+                    dmSectionWindow.IsOpen = true;
+                    
+                    // Ensure it's in the WindowSystem
+                    if (_plugin?.WindowSystem != null && !_plugin.WindowSystem.Windows.Contains(dmSectionWindow))
+                    {
+                        _plugin.WindowSystem.AddWindow(dmSectionWindow);
+                        Plugin.Log.Info("RestoreExistingDMTabs: Added DM Section Window to WindowSystem");
+                    }
+                }
+            }
+
+            Plugin.Log.Info($"RestoreExistingDMTabs: Successfully restored {existingDMTabs.Count} DM tabs");
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"RestoreExistingDMTabs: Error restoring existing DM tabs: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Cleans up stale references and ensures tracking is synchronized with actual state.
+    /// This should be called after plugin reload or when there are state inconsistencies.
+    /// </summary>
+    public void CleanupStaleReferences()
+    {
+        try
+        {
+            Plugin.Log.Debug("CleanupStaleReferences: Starting cleanup of stale DM references");
+            
+            // Clean up windows that are no longer open or registered
+            var staleWindows = _openWindows.Where(kvp => 
+                !kvp.Value.IsOpen || 
+                (_plugin?.WindowSystem != null && !_plugin.WindowSystem.Windows.Contains(kvp.Value))
+            ).ToList();
+            
+            foreach (var kvp in staleWindows)
+            {
+                Plugin.Log.Debug($"CleanupStaleReferences: Removing stale window reference for {kvp.Key.DisplayName}");
+                _openWindows.TryRemove(kvp.Key, out _);
+            }
+            
+            // Clean up tabs that are no longer in the configuration
+            var staleTabs = _openTabs.Where(kvp => 
+                !Plugin.Config.Tabs.Contains(kvp.Value)
+            ).ToList();
+            
+            foreach (var kvp in staleTabs)
+            {
+                Plugin.Log.Debug($"CleanupStaleReferences: Removing stale tab reference for {kvp.Key.DisplayName}");
+                _openTabs.TryRemove(kvp.Key, out _);
+            }
+            
+            // CRITICAL FIX: Remove orphaned DM tabs from configuration instead of re-adding them to tracking
+            // If a DM tab exists in config but not in tracking, it means it was closed and should be removed
+            var orphanedDMTabs = Plugin.Config.Tabs.OfType<DMTab>().Where(dmTab => 
+                !_openTabs.ContainsKey(dmTab.Player)
+            ).ToList();
+            
+            foreach (var dmTab in orphanedDMTabs)
+            {
+                Plugin.Log.Info($"CleanupStaleReferences: Removing orphaned DM tab for {dmTab.Player.DisplayName} from configuration");
+                Plugin.Config.Tabs.Remove(dmTab);
+            }
+            
+            // Save configuration if we removed any orphaned tabs
+            if (orphanedDMTabs.Count > 0)
+            {
+                _plugin?.SaveConfig();
+                Plugin.Log.Info($"CleanupStaleReferences: Saved configuration after removing {orphanedDMTabs.Count} orphaned DM tabs");
+            }
+            
+            Plugin.Log.Info($"CleanupStaleReferences: Cleaned up {staleWindows.Count} stale windows, {staleTabs.Count} stale tabs, and {orphanedDMTabs.Count} orphaned DM tabs");
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to cleanup stale references: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Checks if there are any DM tabs (either in tracking or in configuration).
+    /// </summary>
+    /// <returns>True if there are any DM tabs, false otherwise</returns>
+    private bool HasAnyDMTabs()
+    {
+        try
+        {
+            // Check both our tracking and the configuration
+            var hasTrackedTabs = _openTabs.Count > 0;
+            var hasConfigTabs = Plugin.Config.Tabs.Any(tab => tab is DMTab) == true;
+            
+            return hasTrackedTabs || hasConfigTabs;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to check for DM tabs: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Forces cleanup of a specific player's DM state to resolve "Focus Existing DM" issues.
+    /// </summary>
+    /// <param name="player">The player to force cleanup for</param>
+    public void ForceCleanupPlayer(DMPlayer player)
+    {
+        try
+        {
+            Plugin.Log.Info($"ForceCleanupPlayer: Forcing cleanup for {player.DisplayName}");
+            
+            // Remove from all tracking
+            _openTabs.TryRemove(player, out var removedTab);
+            _openWindows.TryRemove(player, out var removedWindow);
+            
+            // Remove from configuration
+            if (removedTab != null)
+            {
+                Plugin.Config.Tabs.Remove(removedTab);
+            }
+            
+            // Clean up window from WindowSystem if it exists
+            if (removedWindow != null)
+            {
+                removedWindow.IsOpen = false;
+                if (_plugin?.WindowSystem != null && _plugin.WindowSystem.Windows.Contains(removedWindow))
+                {
+                    _plugin.WindowSystem.RemoveWindow(removedWindow);
+                }
+            }
+            
+            _plugin?.SaveConfig();
+            Plugin.Log.Info($"ForceCleanupPlayer: Completed cleanup for {player.DisplayName}");
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to force cleanup player {player}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Aggressively removes all DM tabs from configuration that don't have active windows.
+    /// This is a more thorough cleanup that can be used when the normal cleanup isn't working.
+    /// </summary>
+    public void AggressiveCleanupAllDMTabs()
+    {
+        try
+        {
+            Plugin.Log.Info("AggressiveCleanupAllDMTabs: Starting aggressive cleanup of all DM tabs");
+            
+            // First, log the current state for debugging
+            Plugin.Log.Info($"AggressiveCleanupAllDMTabs: Current state - {_openTabs.Count} tracked tabs, {_openWindows.Count} tracked windows");
+            Plugin.Log.Info($"AggressiveCleanupAllDMTabs: Configuration has {Plugin.Config.Tabs.Count} total tabs, {Plugin.Config.Tabs.OfType<DMTab>().Count()} DM tabs");
+            
+            foreach (var kvp in _openTabs)
+            {
+                Plugin.Log.Info($"AggressiveCleanupAllDMTabs: Tracked tab: {kvp.Key.DisplayName}");
+            }
+            
+            foreach (var kvp in _openWindows)
+            {
+                Plugin.Log.Info($"AggressiveCleanupAllDMTabs: Tracked window: {kvp.Key.DisplayName} (IsOpen: {kvp.Value.IsOpen})");
+            }
+            
+            foreach (var tab in Plugin.Config.Tabs.OfType<DMTab>())
+            {
+                Plugin.Log.Info($"AggressiveCleanupAllDMTabs: Config DM tab: {tab.Player.DisplayName}");
+            }
+            
+            var dmTabsToRemove = new List<DMTab>();
+            
+            // Find all DM tabs in configuration
+            foreach (var tab in Plugin.Config.Tabs.ToList())
+            {
+                if (tab is DMTab dmTab)
+                {
+                    // Check if this DM tab has an active window
+                    var hasActiveWindow = _openWindows.TryGetValue(dmTab.Player, out var window) && 
+                                         window.IsOpen && 
+                                         _plugin?.WindowSystem?.Windows.Contains(window) == true;
+                    
+                    // Check if DM Section Window is open and should contain this tab
+                    var dmSectionOpen = Plugin.Config.DMSectionPoppedOut && 
+                                       _plugin?.DMSectionWindow?.IsOpen == true &&
+                                       !dmTab.PopOut;
+                    
+                    Plugin.Log.Info($"AggressiveCleanupAllDMTabs: {dmTab.Player.DisplayName} - HasActiveWindow: {hasActiveWindow}, DMSectionOpen: {dmSectionOpen}, PopOut: {dmTab.PopOut}");
+                    
+                    if (!hasActiveWindow && !dmSectionOpen)
+                    {
+                        Plugin.Log.Info($"AggressiveCleanupAllDMTabs: Marking DM tab for {dmTab.Player.DisplayName} for removal (no active window and DM section not open)");
+                        dmTabsToRemove.Add(dmTab);
+                    }
+                    else
+                    {
+                        Plugin.Log.Info($"AggressiveCleanupAllDMTabs: Keeping DM tab for {dmTab.Player.DisplayName} (has active window or DM section is open)");
+                    }
+                }
+            }
+            
+            // Remove all marked DM tabs
+            foreach (var dmTab in dmTabsToRemove)
+            {
+                Plugin.Config.Tabs.Remove(dmTab);
+                _openTabs.TryRemove(dmTab.Player, out _);
+                Plugin.Log.Info($"AggressiveCleanupAllDMTabs: Removed DM tab for {dmTab.Player.DisplayName}");
+            }
+            
+            // Clear all tracking that doesn't have corresponding windows or DM section
+            var trackingToRemove = _openTabs.Where(kvp => 
+            {
+                var hasActiveWindow = _openWindows.TryGetValue(kvp.Key, out var window) && window.IsOpen;
+                var dmSectionOpen = Plugin.Config.DMSectionPoppedOut && 
+                                   _plugin?.DMSectionWindow?.IsOpen == true;
+                return !hasActiveWindow && !dmSectionOpen;
+            }).ToList();
+            
+            foreach (var kvp in trackingToRemove)
+            {
+                _openTabs.TryRemove(kvp.Key, out _);
+                Plugin.Log.Info($"AggressiveCleanupAllDMTabs: Removed tracking for {kvp.Key.DisplayName}");
+            }
+            
+            if (dmTabsToRemove.Count > 0 || trackingToRemove.Count > 0)
+            {
+                _plugin?.SaveConfig();
+                Plugin.Log.Info($"AggressiveCleanupAllDMTabs: Completed aggressive cleanup. Removed {dmTabsToRemove.Count} DM tabs and {trackingToRemove.Count} tracking entries");
+            }
+            else
+            {
+                Plugin.Log.Info("AggressiveCleanupAllDMTabs: No cleanup needed");
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to perform aggressive cleanup: {ex.Message}");
+        }
+    }
+}

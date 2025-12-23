@@ -61,8 +61,44 @@ public sealed class DMSectionWindow : Window
         if (ChatLogWindow.IsHidden)
             return false;
             
-        // Only show when DM section is popped out and there are DM tabs
-        return Plugin.Config.DMSectionPoppedOut && HasDMTabs();
+        // Check if we should show the DM section window
+        var shouldShow = Plugin.Config.DMSectionPoppedOut && HasDMTabs();
+        
+        // AGGRESSIVE FIX: Completely remove/add the window from WindowSystem based on whether it should be shown
+        // This prevents FFXIV from trying to activate it when it's not needed
+        if (!shouldShow && IsOpen)
+        {
+            IsOpen = false;
+            
+            // Remove from WindowSystem completely
+            if (Plugin.WindowSystem != null)
+            {
+                try
+                {
+                    // Check if the window is actually registered before trying to remove it
+                    if (Plugin.WindowSystem.Windows.Contains(this))
+                    {
+                        Plugin.WindowSystem.RemoveWindow(this);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Plugin.Log.Warning($"Failed to remove DM Section Window from WindowSystem: {ex.Message}");
+                }
+            }
+        }
+        else if (shouldShow && !IsOpen)
+        {
+            IsOpen = true;
+            
+            // Add back to WindowSystem
+            if (Plugin.WindowSystem != null && !Plugin.WindowSystem.Windows.Contains(this))
+            {
+                Plugin.WindowSystem.AddWindow(this);
+            }
+        }
+        
+        return shouldShow;
     }
 
     public override void OnClose()
@@ -90,7 +126,7 @@ public sealed class DMSectionWindow : Window
         // Save the configuration (to persist the closed tabs)
         Plugin.SaveConfig();
         
-        // Clean up any stale references
+        // CRITICAL FIX: Clean up any stale references to prevent "Focus Existing DM" issues
         DMManager.Instance.CleanupStaleReferences();
         
         // Note: We do NOT turn off Plugin.Config.DMSectionPoppedOut here
