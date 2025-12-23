@@ -55,13 +55,7 @@ internal class DMWindow : Window
     // UI transparency state
     private float _currentUIAlpha = 1.0f;
 
-    // Animation state
-    private readonly Dictionary<int, float> _messageAnimations = new();
-    private readonly Dictionary<int, long> _messageAppearTimes = new();
-    private float _windowFadeAlpha = 0f;
-    private bool _isNewWindow = true;
-    private float _scrollTarget = -1f;
-    private float _currentScroll = 0f;
+    // OPTIMIZATION: Simplified state tracking (removed expensive animation dictionaries)
     private int _lastMessageCount = 0;
 
     public DMWindow(ChatLogWindow chatLogWindow, DMPlayer player) : base($"DM: {player.DisplayName}##dm-window-{player.GetHashCode()}")
@@ -356,59 +350,22 @@ internal class DMWindow : Window
     // Cache for PreDraw calculations to avoid recalculating every frame
     private bool _lastModernUIEnabled = false;
     private float _cachedBgAlpha = 1.0f;
-    private long _lastPreDrawFrame = 0;
     private bool _isWindowFocused = true; // Track window focus state for transparency
 
     public override void PreDraw()
     {
-        // Window entrance animation
-        if (_isNewWindow)
-        {
-            var entranceTime = 400f; // 400ms entrance animation
-            var windowAge = FrameTime - (FrameTime - 400); // This logic is wrong, let me fix it
-            
-            // Better approach: track when window was created
-            if (!_messageAppearTimes.ContainsKey(-1)) // Use -1 as window creation marker
-            {
-                _messageAppearTimes[-1] = FrameTime;
-                Plugin.Log.Info($"DMWindow: Starting window entrance animation at {FrameTime}");
-            }
-            
-            var elapsed = FrameTime - _messageAppearTimes[-1];
-            var progress = Math.Min(1f, elapsed / entranceTime);
-            
-            // Smooth ease-out animation
-            _windowFadeAlpha = 1f - (float)Math.Pow(1f - progress, 2);
-            
-            Plugin.Log.Debug($"DMWindow: Window entrance - elapsed: {elapsed}ms, progress: {progress:F2}, alpha: {_windowFadeAlpha:F2}");
-            
-            if (progress >= 1f)
-            {
-                _isNewWindow = false;
-                _windowFadeAlpha = 1f;
-                Plugin.Log.Info("DMWindow: Window entrance animation completed");
-            }
-        }
-        else
-        {
-            _windowFadeAlpha = 1f;
-        }
-
         // Only apply style changes when necessary
         if (Plugin.Config is { OverrideStyle: true, ChosenStyle: not null })
             StyleModel.GetConfiguredStyles()?.FirstOrDefault(style => style.Name == Plugin.Config.ChosenStyle)?.Push();
 
-        // Cache ModernUI state to avoid repeated checks
+        // OPTIMIZATION: Cache ModernUI state and only apply when needed
         var modernUIEnabled = Plugin.Config.ModernUIEnabled;
         if (modernUIEnabled != _lastModernUIEnabled)
         {
             _lastModernUIEnabled = modernUIEnabled;
-            if (modernUIEnabled)
-            {
-                ModernUI.BeginModernStyle(Plugin.Config);
-            }
         }
-        else if (modernUIEnabled)
+        
+        if (modernUIEnabled)
         {
             ModernUI.BeginModernStyle(Plugin.Config);
         }
@@ -420,11 +377,10 @@ internal class DMWindow : Window
         if (!DMTab.CanResize)
             Flags |= ImGuiWindowFlags.NoResize;
 
-        // Calculate base alpha from settings
+        // OPTIMIZATION: Simplified alpha calculation
         var alpha = DMTab.IndependentOpacity ? DMTab.Opacity : Plugin.Config.WindowAlpha;
         
-        // Apply unfocused transparency for all windows
-        // Use cached focus state that gets updated in Draw()
+        // Apply unfocused transparency (simplified)
         if (!_isWindowFocused)
         {
             var transparencyFactor = Plugin.Config.UnfocusedTransparency / 100f;
@@ -435,15 +391,8 @@ internal class DMWindow : Window
             _cachedBgAlpha = alpha / 100f;
         }
         
-        // Apply window entrance animation to background alpha
-        BgAlpha = _cachedBgAlpha * _windowFadeAlpha;
-        
-        // Temporary debug logging (commented out to reduce log spam)
-        // if ((Environment.TickCount64 % 1000) < 16) // Log every second
-        // {
-        //     var windowAlpha = DMTab.IndependentOpacity ? DMTab.Opacity : Plugin.Config.WindowAlpha;
-        //     Plugin.Log.Info($"DMWindow '{Player.Name}' PreDraw: Focused={_isWindowFocused}, WindowAlpha={windowAlpha}%, UnfocusedTransparency={Plugin.Config.UnfocusedTransparency}%, Final BgAlpha={BgAlpha:F3}");
-        // }
+        // OPTIMIZATION: Remove window entrance animation
+        BgAlpha = _cachedBgAlpha;
     }
 
     public override void Draw()
@@ -453,64 +402,74 @@ internal class DMWindow : Window
         // Update focus state for transparency and mark as read when focused
         _isWindowFocused = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
         
-        // Apply transparency to UI elements based on focus state
+        // Apply transparency to UI elements based on focus state (OPTIMIZED: Only when needed)
         var uiAlpha = _isWindowFocused ? 1.0f : (Plugin.Config.UnfocusedTransparency / 100f);
-        _currentUIAlpha = uiAlpha; // Store for use in nested methods
+        _currentUIAlpha = uiAlpha;
         
-        // Push style colors for UI elements with transparency
-        using var textColor = ImRaii.PushColor(ImGuiCol.Text, ImGui.GetColorU32(ImGuiCol.Text) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
-        using var buttonColor = ImRaii.PushColor(ImGuiCol.Button, ImGui.GetColorU32(ImGuiCol.Button) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
-        using var buttonHoveredColor = ImRaii.PushColor(ImGuiCol.ButtonHovered, ImGui.GetColorU32(ImGuiCol.ButtonHovered) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
-        using var buttonActiveColor = ImRaii.PushColor(ImGuiCol.ButtonActive, ImGui.GetColorU32(ImGuiCol.ButtonActive) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
-        using var frameColor = ImRaii.PushColor(ImGuiCol.FrameBg, ImGui.GetColorU32(ImGuiCol.FrameBg) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
-        using var frameHoveredColor = ImRaii.PushColor(ImGuiCol.FrameBgHovered, ImGui.GetColorU32(ImGuiCol.FrameBgHovered) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
-        using var frameActiveColor = ImRaii.PushColor(ImGuiCol.FrameBgActive, ImGui.GetColorU32(ImGuiCol.FrameBgActive) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
-        using var tabColor = ImRaii.PushColor(ImGuiCol.Tab, ImGui.GetColorU32(ImGuiCol.Tab) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
-        using var tabHoveredColor = ImRaii.PushColor(ImGuiCol.TabHovered, ImGui.GetColorU32(ImGuiCol.TabHovered) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
-        using var tabActiveColor = ImRaii.PushColor(ImGuiCol.TabActive, ImGui.GetColorU32(ImGuiCol.TabActive) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
-        using var separatorColor = ImRaii.PushColor(ImGuiCol.Separator, ImGui.GetColorU32(ImGuiCol.Separator) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24));
+        // OPTIMIZATION: Only push color styles when transparency is actually needed
+        var needsTransparency = uiAlpha < 1.0f;
+        var colorScopes = new List<IDisposable>();
+        
+        if (needsTransparency)
+        {
+            // Only push the essential color styles to reduce overhead
+            colorScopes.Add(ImRaii.PushColor(ImGuiCol.Text, ImGui.GetColorU32(ImGuiCol.Text) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24)));
+            colorScopes.Add(ImRaii.PushColor(ImGuiCol.Button, ImGui.GetColorU32(ImGuiCol.Button) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24)));
+            colorScopes.Add(ImRaii.PushColor(ImGuiCol.FrameBg, ImGui.GetColorU32(ImGuiCol.FrameBg) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24)));
+        }
 
-        // Calculate space for input area
-        var inputHeight = ImGui.GetFrameHeight() + ImGui.GetStyle().ItemSpacing.Y * 2;
-        var messageLogHeight = ImGui.GetContentRegionAvail().Y - inputHeight;
-
-        // Draw message log or empty state using lightweight rendering
         try
         {
-            // Use no timeout to avoid blocking - if messages aren't available immediately, show empty state
-            using var messages = DMTab.Messages.GetReadOnly(0); // No timeout - immediate return
-            if (messages.Count == 0)
+            // Calculate space for input area
+            var inputHeight = ImGui.GetFrameHeight() + ImGui.GetStyle().ItemSpacing.Y * 2;
+            var messageLogHeight = ImGui.GetContentRegionAvail().Y - inputHeight;
+
+            // Draw message log or empty state using optimized rendering
+            try
             {
+                // Use no timeout to avoid blocking - if messages aren't available immediately, show empty state
+                using var messages = DMTab.Messages.GetReadOnly(0); // No timeout - immediate return
+                if (messages.Count == 0)
+                {
+                    DrawEmptyState(messageLogHeight);
+                }
+                else
+                {
+                    // Use optimized message rendering
+                    DrawOptimizedMessageLog(messages, messageLogHeight);
+                }
+            }
+            catch (TimeoutException)
+            {
+                // If we can't get messages immediately, show empty state to avoid blocking
                 DrawEmptyState(messageLogHeight);
             }
-            else
+            catch (Exception ex)
             {
-                // Use lightweight message rendering instead of full ChatLogWindow.DrawMessageLog
-                DrawLightweightMessageLog(messages, messageLogHeight);
+                Plugin.Log.Error($"DMWindow.Draw: Error accessing messages: {ex.Message}");
+                DrawEmptyState(messageLogHeight);
+            }
+
+            // Draw DM-specific input area
+            DrawDMInputArea();
+            
+            if (_isWindowFocused)
+            {
+                LastActivityTime = FrameTime;
+                // Only mark as read every few frames to reduce overhead
+                if ((FrameTime % 100) == 0)
+                {
+                    History.MarkAsRead();
+                    DMTab.MarkAsRead();
+                }
             }
         }
-        catch (TimeoutException)
+        finally
         {
-            // If we can't get messages immediately, show empty state to avoid blocking
-            DrawEmptyState(messageLogHeight);
-        }
-        catch (Exception ex)
-        {
-            Plugin.Log.Error($"DMWindow.Draw: Error accessing messages: {ex.Message}");
-            DrawEmptyState(messageLogHeight);
-        }
-
-        // Draw DM-specific input area
-        DrawDMInputArea();
-        
-        if (_isWindowFocused)
-        {
-            LastActivityTime = FrameTime;
-            // Only mark as read every few frames to reduce overhead
-            if ((FrameTime % 100) == 0)
+            // Dispose color scopes
+            foreach (var scope in colorScopes)
             {
-                History.MarkAsRead();
-                DMTab.MarkAsRead();
+                scope.Dispose();
             }
         }
     }
@@ -723,38 +682,20 @@ internal class DMWindow : Window
     }
 
     /// <summary>
-    /// Lightweight message rendering specifically optimized for DM windows.
-    /// Avoids the expensive operations in ChatLogWindow.DrawMessageLog.
-    /// Now includes smooth animations for better UX.
+    /// Optimized message rendering specifically for DM windows.
+    /// Removes expensive animations and complex processing for better performance.
     /// </summary>
-    private void DrawLightweightMessageLog(IReadOnlyList<Message> messages, float childHeight)
+    private void DrawOptimizedMessageLog(IReadOnlyList<Message> messages, float childHeight)
     {
         // Add NoBackground flag to prevent darker background
         using var child = ImRaii.Child("##dm-messages", new Vector2(-1, childHeight), false, ImGuiWindowFlags.NoBackground);
         if (!child.Success)
             return;
 
-        // Detect new messages for animations
-        if (messages.Count != _lastMessageCount)
-        {
-            Plugin.Log.Debug($"DMWindow: New messages detected! Count changed from {_lastMessageCount} to {messages.Count}");
-            
-            // New messages detected - set up animations
-            for (int i = _lastMessageCount; i < messages.Count; i++)
-            {
-                _messageAnimations[i] = 0f; // Start invisible
-                _messageAppearTimes[i] = FrameTime;
-                Plugin.Log.Debug($"DMWindow: Setting up animation for message {i}");
-            }
-            _lastMessageCount = messages.Count;
-            
-            // Set scroll target to bottom for new messages
-            _scrollTarget = float.MaxValue;
-        }
-
+        // OPTIMIZATION: Remove animation system for better performance
+        // Simple message rendering without animations
         using (ImRaii.PushStyle(ImGuiStyleVar.ItemSpacing, Vector2.Zero))
         {
-            // Simple message rendering with animations
             var maxMessages = Math.Min(messages.Count, Plugin.Config.MaxLinesToRender);
             var startIndex = Math.Max(0, messages.Count - maxMessages);
             
@@ -765,147 +706,67 @@ internal class DMWindow : Window
             {
                 var message = messages[i];
                 
-                // Calculate animation alpha for this message
-                var messageAlpha = GetMessageAlpha(i);
-                
-                if (messageAlpha <= 0.01f)
-                    continue; // Skip invisible messages
-                
-                // Apply message alpha
-                using (ImRaii.PushStyle(ImGuiStyleVar.Alpha, messageAlpha))
+                // Draw timestamp like regular chat (24h format, no repetition, proper spacing)
+                if (DMTab.DisplayTimestamp)
                 {
-                    // Draw timestamp like regular chat (24h format, no repetition, proper spacing)
-                    if (DMTab.DisplayTimestamp)
+                    var localTime = message.Date.ToLocalTime();
+                    var currentTimestamp = localTime.ToString("HH:mm"); // 24h format like regular chat
+                    
+                    // Only show timestamp if it's different from the last one (like regular chat)
+                    if (currentTimestamp != lastTimestamp)
                     {
-                        var localTime = message.Date.ToLocalTime();
-                        var currentTimestamp = localTime.ToString("HH:mm"); // 24h format like regular chat
-                        
-                        // Only show timestamp if it's different from the last one (like regular chat)
-                        if (currentTimestamp != lastTimestamp)
+                        using (ImRaii.PushColor(ImGuiCol.Text, 0xFF888888)) // Gray color like regular chat
                         {
-                            using (ImRaii.PushColor(ImGuiCol.Text, 0xFF888888)) // Gray color like regular chat
-                            {
-                                ImGui.TextUnformatted(currentTimestamp);
-                            }
-                            ImGui.SameLine();
-                            
-                            // Add proper spacing after timestamp (like regular chat)
-                            ImGui.Dummy(new Vector2(8, 0)); // More spacing like regular chat
-                            ImGui.SameLine();
-                            
-                            lastTimestamp = currentTimestamp;
+                            ImGui.TextUnformatted(currentTimestamp);
                         }
-                        else
-                        {
-                            // Same timestamp as previous message - add equivalent spacing
-                            ImGui.Dummy(new Vector2(ImGui.CalcTextSize(currentTimestamp).X + 8, 0));
-                            ImGui.SameLine();
-                        }
-                    }
-
-                    // Draw sender (if present)
-                    if (message.Sender.Count > 0)
-                    {
-                        DrawAnimatedChunks(message.Sender, messageAlpha, message);
                         ImGui.SameLine();
-                    }
-
-                    // Draw content
-                    if (message.Content.Count > 0)
-                    {
-                        DrawAnimatedChunks(message.Content, messageAlpha, message);
+                        
+                        // Add proper spacing after timestamp (like regular chat)
+                        ImGui.Dummy(new Vector2(8, 0)); // More spacing like regular chat
+                        ImGui.SameLine();
+                        
+                        lastTimestamp = currentTimestamp;
                     }
                     else
                     {
-                        ImGui.TextUnformatted(" "); // Ensure something is drawn
+                        // Same timestamp as previous message - add equivalent spacing
+                        ImGui.Dummy(new Vector2(ImGui.CalcTextSize(currentTimestamp).X + 8, 0));
+                        ImGui.SameLine();
                     }
+                }
+
+                // Draw sender (if present)
+                if (message.Sender.Count > 0)
+                {
+                    DrawOptimizedChunks(message.Sender, message);
+                    ImGui.SameLine();
+                }
+
+                // Draw content
+                if (message.Content.Count > 0)
+                {
+                    DrawOptimizedChunks(message.Content, message);
+                }
+                else
+                {
+                    ImGui.TextUnformatted(" "); // Ensure something is drawn
                 }
             }
         }
 
-        // Smooth scrolling animation
-        HandleSmoothScrolling();
-    }
-
-    /// <summary>
-    /// Calculates the alpha value for message fade-in animation.
-    /// </summary>
-    private float GetMessageAlpha(int messageIndex)
-    {
-        // If ModernUI is disabled, always show messages fully
-        if (!Plugin.Config.ModernUIEnabled)
+        // OPTIMIZATION: Remove smooth scrolling animation for better performance
+        // Auto-scroll to bottom for new messages (instant)
+        if (messages.Count != _lastMessageCount)
         {
-            return 1f;
-        }
-
-        if (!_messageAnimations.TryGetValue(messageIndex, out var currentAlpha))
-        {
-            return 1f; // Fully visible for existing messages
-        }
-
-        if (!_messageAppearTimes.TryGetValue(messageIndex, out var appearTime))
-        {
-            return 1f;
-        }
-
-        // Animate over 300ms
-        var animationDuration = 300f;
-        var elapsed = FrameTime - appearTime;
-        var progress = Math.Min(1f, elapsed / animationDuration);
-        
-        // Smooth easing function (ease-out)
-        var easedProgress = 1f - (float)Math.Pow(1f - progress, 3);
-        
-        // Update cached alpha
-        _messageAnimations[messageIndex] = easedProgress;
-        
-        // Debug logging for first few frames
-        if (elapsed < 100)
-        {
-            Plugin.Log.Debug($"DMWindow: Message {messageIndex} animation - elapsed: {elapsed}ms, progress: {progress:F2}, alpha: {easedProgress:F2}");
-        }
-        
-        return easedProgress;
-    }
-
-    /// <summary>
-    /// Handles smooth scrolling to new messages.
-    /// </summary>
-    private void HandleSmoothScrolling()
-    {
-        if (_scrollTarget < 0)
-            return;
-
-        var currentScrollY = ImGui.GetScrollY();
-        var maxScrollY = ImGui.GetScrollMaxY();
-        
-        // If we want to scroll to bottom
-        if (_scrollTarget >= maxScrollY)
-        {
-            var targetScroll = maxScrollY;
-            var scrollDiff = targetScroll - currentScrollY;
-            
-            if (Math.Abs(scrollDiff) < 1f)
-            {
-                // Close enough, snap to target
-                ImGui.SetScrollY(targetScroll);
-                _scrollTarget = -1f;
-            }
-            else
-            {
-                // Smooth interpolation
-                var lerpSpeed = 0.15f; // Adjust for faster/slower scrolling
-                var newScroll = currentScrollY + scrollDiff * lerpSpeed;
-                ImGui.SetScrollY(newScroll);
-            }
+            _lastMessageCount = messages.Count;
+            ImGui.SetScrollHereY(1.0f); // Scroll to bottom instantly
         }
     }
 
     /// <summary>
-    /// Simple chunk rendering with animation support and CrossWorld icon support.
-    /// Now includes error message coloring.
+    /// Optimized chunk rendering without animations for better performance.
     /// </summary>
-    private void DrawAnimatedChunks(IReadOnlyList<Chunk> chunks, float messageAlpha, Message message)
+    private void DrawOptimizedChunks(IReadOnlyList<Chunk> chunks, Message message)
     {
         for (var i = 0; i < chunks.Count; i++)
         {
@@ -914,71 +775,42 @@ internal class DMWindow : Window
             if (i > 0)
                 ImGui.SameLine();
             
-            // Handle different chunk types with animation
+            // Handle different chunk types with minimal processing
             switch (chunk)
             {
                 case TextChunk textChunk:
-                    // Determine color based on message type
-                    uint baseColor;
+                    // Determine color based on message type (simplified)
                     if (message.Code.Type == ChatType.Error)
                     {
-                        baseColor = 0xFF4444FF; // Red color for error messages (ABGR format)
+                        using (ImRaii.PushColor(ImGuiCol.Text, 0xFF4444FF)) // Red for errors
+                        {
+                            ImGui.TextUnformatted(textChunk.Content);
+                        }
                     }
                     else
-                    {
-                        baseColor = 0xFFFFFFFF; // White for normal messages
-                    }
-                    
-                    var animatedColor = ApplyAlphaToColor(baseColor, messageAlpha);
-                    
-                    using (ImRaii.PushColor(ImGuiCol.Text, ColourUtil.RgbaToAbgr(animatedColor)))
                     {
                         ImGui.TextUnformatted(textChunk.Content);
                     }
                     break;
                     
                 case IconChunk iconChunk:
-                    // Handle CrossWorld and other icons
-                    var iconColor = ApplyAlphaToColor(0xFFFFFFFF, messageAlpha);
-                    using (ImRaii.PushColor(ImGuiCol.Text, ColourUtil.RgbaToAbgr(iconColor)))
+                    // Simplified icon handling
+                    if (iconChunk.Icon == BitmapFontIcon.CrossWorld)
                     {
-                        // Check if this is a CrossWorld icon
-                        if (iconChunk.Icon == BitmapFontIcon.CrossWorld)
-                        {
-                            // Render the CrossWorld icon using the same character as main chat
-                            ImGui.TextUnformatted($"{(char)SeIconChar.CrossWorld}");
-                        }
-                        else
-                        {
-                            // For other icons, show a generic representation
-                            ImGui.TextUnformatted($"[{iconChunk.Icon}]");
-                        }
+                        ImGui.TextUnformatted($"{(char)SeIconChar.CrossWorld}");
+                    }
+                    else
+                    {
+                        ImGui.TextUnformatted($"[{iconChunk.Icon}]");
                     }
                     break;
                     
                 default:
                     // Fallback for unknown chunk types
-                    var fallbackColor = ApplyAlphaToColor(0xFFFFFFFF, messageAlpha);
-                    using (ImRaii.PushColor(ImGuiCol.Text, ColourUtil.RgbaToAbgr(fallbackColor)))
-                    {
-                        ImGui.TextUnformatted(chunk.StringValue());
-                    }
+                    ImGui.TextUnformatted(chunk.StringValue());
                     break;
             }
         }
-    }
-
-    /// <summary>
-    /// Applies alpha to a color while preserving RGB values.
-    /// </summary>
-    private uint ApplyAlphaToColor(uint color, float alpha)
-    {
-        var a = (byte)(((color >> 24) & 0xFF) * alpha);
-        var r = (byte)((color >> 16) & 0xFF);
-        var g = (byte)((color >> 8) & 0xFF);
-        var b = (byte)(color & 0xFF);
-        
-        return ((uint)a << 24) | ((uint)r << 16) | ((uint)g << 8) | b;
     }
 
     private void DrawSimpleChunks(IReadOnlyList<Chunk> chunks)
@@ -1658,11 +1490,12 @@ internal class DMWindow : Window
 
     /// <summary>
     /// Checks if the player is already in the friend list (cached for performance).
+    /// OPTIMIZED: Reduced frequency and simplified logic.
     /// </summary>
     /// <returns>True if the player is already a friend, false otherwise</returns>
     private bool IsPlayerAlreadyFriend()
     {
-        // Use cached result if recent
+        // OPTIMIZATION: Use longer cache interval to reduce overhead
         if (FrameTime - _lastFriendCheck < FriendCheckInterval)
         {
             return _cachedIsFriend;
@@ -1672,51 +1505,16 @@ internal class DMWindow : Window
         
         try
         {
-            unsafe
+            // OPTIMIZATION: Simplified friend checking using GameFunctions
+            var friends = GameFunctions.GameFunctions.GetFriends();
+            _cachedIsFriend = friends.Any(friend => 
             {
-                var friendListString = FFXIVClientStructs.FFXIV.Client.UI.Arrays.FriendListStringArray.Instance();
-                var friendListNumber = FFXIVClientStructs.FFXIV.Client.UI.Arrays.FriendListNumberArray.Instance();
-                
-                if (friendListString == null || friendListNumber == null)
-                {
-                    Plugin.Log.Debug("IsPlayerAlreadyFriend: Friend list arrays not available");
-                    _cachedIsFriend = false;
-                    return false;
-                }
-                
-                var totalFriends = friendListNumber->TotalFriendCount;
-                
-                // Access the raw string data directly using pointer arithmetic
-                // The struct starts with the _data array, so we can cast the pointer
-                var dataPtr = (byte**)friendListString;
-                
-                for (int i = 0; i < totalFriends && i < 200; i++) // Max 200 friends
-                {
-                    // Each friend entry has 5 strings: PlayerName, Activity, FcName, Status, GrandCompanyName
-                    var friendNameIndex = i * 5; // PlayerName is at offset 0 for each friend
-                    
-                    if (friendNameIndex < 1000) // Make sure we don't go out of bounds
-                    {
-                        var friendNamePtr = dataPtr[friendNameIndex];
-                        if (friendNamePtr != null)
-                        {
-                            var friendName = System.Runtime.InteropServices.Marshal.PtrToStringUTF8((IntPtr)friendNamePtr);
-                            if (!string.IsNullOrEmpty(friendName))
-                            {
-                                // Compare names (case-insensitive)
-                                if (string.Equals(Player.Name, friendName, StringComparison.OrdinalIgnoreCase))
-                                {
-                                    _cachedIsFriend = true;
-                                    return true;
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                _cachedIsFriend = false;
-                return false;
-            }
+                // Convert the FixedSizeArray32<byte> to string
+                var friendName = System.Text.Encoding.UTF8.GetString(friend.Name).TrimEnd('\0');
+                return string.Equals(Player.Name, friendName, StringComparison.OrdinalIgnoreCase);
+            });
+            
+            return _cachedIsFriend;
         }
         catch (Exception ex)
         {

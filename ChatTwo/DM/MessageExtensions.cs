@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using ChatTwo.Code;
 using Dalamud.Game.Text.SeStringHandling;
+using Dalamud.Game.Text.SeStringHandling.Payloads;
 
 namespace ChatTwo.DM;
 
@@ -156,7 +157,19 @@ internal static class MessageExtensions
             {
                 Plugin.Log.Debug($"ExtractPlayerFromMessage: Processing incoming tell, sender chunks count: {message.Sender.Count}");
                 
-                // Extract player name from sender chunks - just get the text content
+                // First, try to find a PlayerPayload in the sender chunks (most reliable for world info)
+                var playerPayload = message.Sender
+                    .Select(chunk => chunk.Link)
+                    .OfType<PlayerPayload>()
+                    .FirstOrDefault();
+                
+                if (playerPayload != null)
+                {
+                    Plugin.Log.Debug($"ExtractPlayerFromMessage: Found PlayerPayload - Name: '{playerPayload.PlayerName}', World: {playerPayload.World.RowId}");
+                    return new DMPlayer(playerPayload.PlayerName, playerPayload.World.RowId, message.ContentId);
+                }
+                
+                // Fallback: Extract player name from sender chunks text content
                 var senderName = string.Join("", message.Sender.Select(c => c.StringValue())).Trim();
                 Plugin.Log.Debug($"ExtractPlayerFromMessage: Raw sender name: '{senderName}'");
                 
@@ -166,7 +179,7 @@ internal static class MessageExtensions
                 
                 if (!string.IsNullOrEmpty(senderName))
                 {
-                    // Try to extract world from ContentId first (most reliable)
+                    // Try to extract world from ContentId (fallback method)
                     var worldFromContentId = ExtractWorldIdFromContentId(message.ContentId);
                     var world = worldFromContentId ?? GetCurrentPlayerWorld();
                     
