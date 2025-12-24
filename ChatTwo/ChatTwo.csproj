@@ -1,7 +1,7 @@
-<Project Sdk="Dalamud.NET.Sdk/13.1.0">
+<Project Sdk="Dalamud.NET.Sdk/14.0.0">
     <PropertyGroup>
         <Version>1.32.0</Version>
-        <TargetFramework>net9.0-windows</TargetFramework>
+        <TargetFramework>net10.0-windows</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -15,7 +15,7 @@
 
     <ItemGroup>
         <PackageReference Include="MessagePack" Version="3.1.4" />
-        <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
+        <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.0" />
         <PackageReference Include="Pidgin" Version="3.3.0" />
         <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
         <PackageReference Include="Watson.Lite" Version="6.3.9" />
@@ -54,10 +54,10 @@
     <!--        <Copy SourceFiles="@(Files)" DestinationFolder="$(TargetDir)\Frontend\%(RecursiveDir)" />-->
     <!--    </Target>-->
 
-    <Target Name="NodeJS Compile" BeforeTargets="BeforeCompile" Condition="'$(Configuration)' == 'Debug'">
-        <Exec Command="npm install" WorkingDirectory="Http\Frontend"/>
-        <Exec Command="npm run build" WorkingDirectory="Http\Frontend"/>
-    </Target>
+    <!--    <Target Name="NodeJS Compile" BeforeTargets="BeforeCompile" Condition="'$(Configuration)' == 'Debug'">-->
+    <!--        <Exec Command="npm install" WorkingDirectory="Http\Frontend"/>-->
+    <!--        <Exec Command="npm run build" WorkingDirectory="Http\Frontend"/>-->
+    <!--    </Target>-->
     
     <Target Name="UnzipBuild" AfterTargets="Build">
         <Unzip SourceFiles="websiteBuild.zip" DestinationFolder="$(TargetDir)\Frontend"/>

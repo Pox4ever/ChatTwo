@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Concurrent;
 using ChatTwo.Code;
+using ChatTwo.DM;
 using ChatTwo.GameFunctions.Types;
 using ChatTwo.Resources;
 using ChatTwo.Util;
@@ -81,6 +82,19 @@ internal class Configuration : IPluginConfiguration
 
     public bool ShowEmotes = true;
     public HashSet<string> BlockedEmotes = [];
+    
+    // (Pox4eveR) Custom emote features
+    public bool EnableBetterTTVEmotes = true;
+    public bool EnableSevenTVEmotes = true;
+    public float EmoteSize = 1.0f; // Emote size multiplier (1.0 = normal size)
+    public string TwitchUsernames = ""; // Twitch usernames (comma-separated, e.g. "pox4ever,shroud") - will be automatically converted to user IDs
+    public string TwitchUserIds = ""; // Twitch user IDs (comma-separated, e.g. "410517388,123456789") for loading personal 7TV emotes
+    
+    // Twitch OAuth integration
+    public string TwitchAccessToken = "";
+    public string TwitchUsername = "";
+    public string TwitchUserId = "";
+    public DateTime TwitchTokenExpiry = DateTime.MinValue;
 
     public bool FontsEnabled = true;
     public ExtraGlyphRanges ExtraGlyphRanges = 0;
@@ -111,8 +125,49 @@ internal class Configuration : IPluginConfiguration
 
     public bool OverrideStyle;
     public string? ChosenStyle;
+    
+    // Modern UI Settings
+    public bool ModernUIEnabled = true;
+    public float UIRounding = 6.0f;
+    public float UIBorderSize = 1.0f;
+    public bool UseModernColors = true;
+    public float ShadowStrength = 0.3f;
+    
+    // Enhanced Input Area Settings
+    public bool ShowFloatingChannelIndicator = true;
+    public bool ShowTypingIndicator = true;
+    public bool EnhancedInputFeedback = true;
+    public float UnfocusedTransparency = 70.0f; // Percentage of transparency for unfocused windows
+    
+    // Better Tab System Settings
+    public bool ShowTabIcons = true;
+    public bool EnableTabDragReorder = true;
+    public bool SmoothTabTransitions = true;
+    
+    // Enhanced Emote Integration Settings
+    public bool ShowInlineEmotePreviews = true;
+    public bool EnableEmotePickerPopup = true;
+    public bool EmotePickerSearchEnabled = true;
+    
+    // DM Section Pop-out Settings
+    public bool DMSectionPoppedOut = true; // Whether the DM section is currently popped out
+    public bool ShowDMSectionCollapseButtons = true; // Whether to show collapse/expand buttons in DM section window
+
+    // DM Management Settings
+    public bool CloseDMsOnLogout { get; set; } = false;
+    public bool CloseDMsInCombat { get; set; } = false;
+    public bool AutoOpenDMOnNewTell { get; set; } = false;
+    public DMDefaultMode DefaultDMMode { get; set; } = DMDefaultMode.Tab;
+    public ConfigKeyBind? OpenRecentDMKeybind { get; set; }
 
     public ConfigKeyBind? ChatTabForward;
+
+    public enum DMDefaultMode
+    {
+        Tab,
+        Window,
+        Ask // Show both options in context menu
+    }
     public ConfigKeyBind? ChatTabBackward;
 
     // Webinterface
@@ -123,11 +178,50 @@ internal class Configuration : IPluginConfiguration
     public HashSet<string> AuthStore = [];
     public int WebinterfaceMaxLinesToSend = 1000; // 1-10000
 
+    // DM Feature Settings
+    public bool EnableDMWindows { get; set; } = true;
+    public bool EnableDMTabs { get; set; } = true;
+    
+    // Message Routing Settings
+    public bool ShowTellsInMainChat { get; set; } = true;
+    public bool ShowTellsInDMOnly { get; set; } = false;
+    
+    // Window Management Settings
+    public bool CascadeDMWindows { get; set; } = true;
+    public System.Numerics.Vector2 DMWindowCascadeOffset { get; set; } = new(30, 30);
+    
+    // Appearance Settings
+    public bool ShowDMTabIcons { get; set; } = true;
+    public bool ShowUnreadIndicators { get; set; } = true;
+    public string DMTabSuffix { get; set; } = " (DM)"; // For name conflicts
+    
+    // DM Message History Settings
+    public bool LoadDMMessageHistory { get; set; } = true; // Whether to load previous DM messages when opening a DM tab/window
+    public int DMMessageHistoryCount { get; set; } = 50; // Number of previous messages to load (1-200)
+    public bool SaveDMMessages { get; set; } = true; // Whether to save DM messages to database (uses existing DatabaseBattleMessages logic)
+    
+    // DM Color Settings
+    public bool UseDMCustomColors { get; set; } = true; // Whether to use custom colors for DM messages
+    public uint DMIncomingColor { get; set; } = 0xFFFFB3FF; // Default FFXIV tell color (pinkish)
+    public uint DMOutgoingColor { get; set; } = 0xFFFFB3FF; // Same color for consistency
+    public uint DMErrorColor { get; set; } = 0xFF4444FF; // Red color for error messages
+    
+    // DM Window Persistence Settings
+    public List<DMWindowState> OpenDMWindows { get; set; } = new(); // Persisted DM windows that should be restored on plugin reload
+
     internal void UpdateFrom(Configuration other, bool backToOriginal)
     {
         if (backToOriginal)
-            foreach (var tab in Tabs.Where(t => t.PopOut))
+        {
+            // Only reset PopOut for regular tabs, not DM tabs
+            // DM tabs in the DM Section Window should stay there
+            var tabsToReset = Tabs.Where(t => t.PopOut && !(t is ChatTwo.DM.DMTab)).ToList();
+            
+            foreach (var tab in tabsToReset)
+            {
                 tab.PopOut = false;
+            }
+        }
 
         HideChat = other.HideChat;
         HideDuringCutscenes = other.HideDuringCutscenes;
@@ -171,6 +265,21 @@ internal class Configuration : IPluginConfiguration
         Use24HourClock = other.Use24HourClock;
         ShowEmotes = other.ShowEmotes;
         BlockedEmotes = other.BlockedEmotes;
+        
+        // (Pox4eveR) Custom emote features
+        if (other is Configuration otherConfig)
+        {
+            EnableBetterTTVEmotes = otherConfig.EnableBetterTTVEmotes;
+            EnableSevenTVEmotes = otherConfig.EnableSevenTVEmotes;
+            EmoteSize = otherConfig.EmoteSize;
+            TwitchUsernames = otherConfig.TwitchUsernames;
+            TwitchUserIds = otherConfig.TwitchUserIds;
+            TwitchAccessToken = otherConfig.TwitchAccessToken;
+            TwitchUsername = otherConfig.TwitchUsername;
+            TwitchUserId = otherConfig.TwitchUserId;
+            TwitchTokenExpiry = otherConfig.TwitchTokenExpiry;
+        }
+        
         FontsEnabled = other.FontsEnabled;
         ItalicEnabled = other.ItalicEnabled;
         ExtraGlyphRanges = other.ExtraGlyphRanges;
@@ -182,9 +291,64 @@ internal class Configuration : IPluginConfiguration
         TooltipOffset = other.TooltipOffset;
         WindowAlpha = other.WindowAlpha;
         ChatColours = other.ChatColours.ToDictionary(entry => entry.Key, entry => entry.Value);
+        
+        // CRITICAL: This line overwrites all our tab modifications!
+        // We need to preserve DM tab states from the current config
+        var preservedDMTabs = Tabs.OfType<ChatTwo.DM.DMTab>().ToList();
+        
         Tabs = other.Tabs.Select(t => t.Clone()).ToList();
+        
+        // Re-add preserved DM tabs or update their states
+        foreach (var preservedDMTab in preservedDMTabs)
+        {
+            // Find if this DM tab exists in the new tabs list
+            var existingDMTab = Tabs.OfType<ChatTwo.DM.DMTab>()
+                .FirstOrDefault(t => t.Player.Name == preservedDMTab.Player.Name && 
+                                   t.Player.HomeWorld == preservedDMTab.Player.HomeWorld);
+            
+            if (existingDMTab != null)
+            {
+                // Update the existing DM tab to preserve its PopOut state
+                existingDMTab.PopOut = preservedDMTab.PopOut;
+            }
+        }
         OverrideStyle = other.OverrideStyle;
         ChosenStyle = other.ChosenStyle;
+        
+        // Modern UI Settings
+        ModernUIEnabled = other.ModernUIEnabled;
+        UIRounding = other.UIRounding;
+        UIBorderSize = other.UIBorderSize;
+        UseModernColors = other.UseModernColors;
+        ShadowStrength = other.ShadowStrength;
+        
+        // Enhanced Input Area Settings
+        ShowFloatingChannelIndicator = other.ShowFloatingChannelIndicator;
+        ShowTypingIndicator = other.ShowTypingIndicator;
+        EnhancedInputFeedback = other.EnhancedInputFeedback;
+        UnfocusedTransparency = other.UnfocusedTransparency;
+        
+        // Better Tab System Settings
+        ShowTabIcons = other.ShowTabIcons;
+        EnableTabDragReorder = other.EnableTabDragReorder;
+        SmoothTabTransitions = other.SmoothTabTransitions;
+        
+        // Enhanced Emote Integration Settings
+        ShowInlineEmotePreviews = other.ShowInlineEmotePreviews;
+        EnableEmotePickerPopup = other.EnableEmotePickerPopup;
+        EmotePickerSearchEnabled = other.EmotePickerSearchEnabled;
+        
+        // DM Section Pop-out Settings
+        DMSectionPoppedOut = other.DMSectionPoppedOut;
+        ShowDMSectionCollapseButtons = other.ShowDMSectionCollapseButtons;
+        
+        // DM Management Settings
+        CloseDMsOnLogout = other.CloseDMsOnLogout;
+        CloseDMsInCombat = other.CloseDMsInCombat;
+        AutoOpenDMOnNewTell = other.AutoOpenDMOnNewTell;
+        DefaultDMMode = other.DefaultDMMode;
+        OpenRecentDMKeybind = other.OpenRecentDMKeybind;
+        
         ChatTabForward = other.ChatTabForward;
         ChatTabBackward = other.ChatTabBackward;
         WebinterfaceEnabled = other.WebinterfaceEnabled;
@@ -192,11 +356,34 @@ internal class Configuration : IPluginConfiguration
         WebinterfacePassword = other.WebinterfacePassword;
         WebinterfacePort = other.WebinterfacePort;
         WebinterfaceMaxLinesToSend = other.WebinterfaceMaxLinesToSend;
+        
+        // DM Feature Settings
+        EnableDMWindows = other.EnableDMWindows;
+        EnableDMTabs = other.EnableDMTabs;
+        ShowTellsInMainChat = other.ShowTellsInMainChat;
+        ShowTellsInDMOnly = other.ShowTellsInDMOnly;
+        CascadeDMWindows = other.CascadeDMWindows;
+        DMWindowCascadeOffset = other.DMWindowCascadeOffset;
+        ShowDMTabIcons = other.ShowDMTabIcons;
+        ShowUnreadIndicators = other.ShowUnreadIndicators;
+        DMTabSuffix = other.DMTabSuffix;
+        LoadDMMessageHistory = other.LoadDMMessageHistory;
+        DMMessageHistoryCount = other.DMMessageHistoryCount;
+        SaveDMMessages = other.SaveDMMessages;
+        
+        // DM Color Settings
+        UseDMCustomColors = other.UseDMCustomColors;
+        DMIncomingColor = other.DMIncomingColor;
+        DMOutgoingColor = other.DMOutgoingColor;
+        DMErrorColor = other.DMErrorColor;
+        
+        // DM Window Persistence Settings
+        OpenDMWindows = other.OpenDMWindows?.Select(w => w.Clone()).ToList() ?? new();
     }
 }
 
 [Serializable]
-internal enum UnreadMode
+public enum UnreadMode
 {
     All,
     Unseen,
@@ -223,7 +410,7 @@ internal static class UnreadModeExt
 }
 
 [Serializable]
-internal class Tab
+public class Tab
 {
     public string Name = Language.Tab_DefaultName;
     public Dictionary<ChatType, ChatSource> ChatCodes = new();
@@ -274,7 +461,7 @@ internal class Tab
 
     internal void Clear() => Messages.Clear();
 
-    internal Tab Clone()
+    internal virtual Tab Clone()
     {
         return new Tab
         {
@@ -310,7 +497,7 @@ internal class Tab
     /// MessageList provides an ordered list of messages with duplicate ID
     /// tracking, sorting and mutex protection.
     /// </summary>
-    internal class MessageList
+    public class MessageList
     {
         private readonly SemaphoreSlim LockSlim = new(1, 1);
 
@@ -423,8 +610,10 @@ internal class Tab
             return new RLockedMessageList(LockSlim, Messages);
         }
 
-        internal class RLockedMessageList(SemaphoreSlim lockSlim, List<Message> messages) : IReadOnlyList<Message>, IDisposable
+        public class RLockedMessageList(SemaphoreSlim lockSlim, List<Message> messages) : IReadOnlyList<Message>, IDisposable
         {
+            private bool _disposed = false;
+            
             public IEnumerator<Message> GetEnumerator()
             {
                 return messages.GetEnumerator();
@@ -441,13 +630,28 @@ internal class Tab
 
             public void Dispose()
             {
-                lockSlim.Release();
+                if (!_disposed)
+                {
+                    try
+                    {
+                        lockSlim.Release();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        // Semaphore was already disposed, ignore
+                    }
+                    catch (SemaphoreFullException)
+                    {
+                        // Semaphore is already at max count, ignore
+                    }
+                    _disposed = true;
+                }
             }
         }
     }
 }
 
-internal class UsedChannel
+public class UsedChannel
 {
     internal InputChannel Channel = InputChannel.Invalid;
     internal List<Chunk> Name = [];
@@ -645,4 +849,68 @@ internal static class ExtraGlyphRangesExt
         ExtraGlyphRanges.Vietnamese => (nint)ImGui.GetIO().Fonts.GetGlyphRangesVietnamese(),
         _ => throw new ArgumentOutOfRangeException(nameof(ranges), ranges, null),
     };
+}
+
+
+internal static class DMDefaultModeExt
+{
+    internal static string Name(this Configuration.DMDefaultMode mode) => mode switch
+    {
+        Configuration.DMDefaultMode.Tab => "Tab",
+        Configuration.DMDefaultMode.Window => "Window", 
+        Configuration.DMDefaultMode.Ask => "Ask Each Time",
+        _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, null),
+    };
+
+    internal static string? Tooltip(this Configuration.DMDefaultMode mode) => mode switch
+    {
+        Configuration.DMDefaultMode.Tab => "Open DMs as tabs in the main chat window by default",
+        Configuration.DMDefaultMode.Window => "Open DMs as separate windows by default",
+        Configuration.DMDefaultMode.Ask => "Show both tab and window options in context menu",
+        _ => null,
+    };
+}
+
+/// <summary>
+/// Represents the persistent state of a DM Window that should be restored after plugin reload.
+/// </summary>
+[Serializable]
+internal class DMWindowState
+{
+    public string PlayerName { get; set; } = "";
+    public uint WorldId { get; set; }
+    public ulong ContentId { get; set; }
+    public System.Numerics.Vector2 Position { get; set; }
+    public System.Numerics.Vector2 Size { get; set; }
+    public bool IsOpen { get; set; } = true;
+    
+    public DMWindowState() { }
+    
+    public DMWindowState(DMPlayer player, System.Numerics.Vector2 position, System.Numerics.Vector2 size, bool isOpen = true)
+    {
+        PlayerName = player.Name;
+        WorldId = player.HomeWorld;
+        ContentId = player.ContentId;
+        Position = position;
+        Size = size;
+        IsOpen = isOpen;
+    }
+    
+    public DMPlayer ToDMPlayer()
+    {
+        return new DMPlayer(PlayerName, WorldId, ContentId);
+    }
+    
+    public DMWindowState Clone()
+    {
+        return new DMWindowState
+        {
+            PlayerName = PlayerName,
+            WorldId = WorldId,
+            ContentId = ContentId,
+            Position = Position,
+            Size = Size,
+            IsOpen = IsOpen
+        };
+    }
 }

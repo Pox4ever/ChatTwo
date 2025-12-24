@@ -1,8 +1,8 @@
-name: Chat 2
+name: (Pox4eveR) Chat 2
 author: Infi, Anna
-punchline: Electric Boogaloo - ♪ A whole new chat, a new fantastic chat window ♪
+punchline: (Pox4eveR) Electric Boogaloo - ♪ Enhanced with 7TV emotes and customizable sizing ♪
 description: |-
-  Chat 2 is a complete rewrite of the in-game chat window as a plugin.
+  (Pox4eveR) Chat 2 is a complete rewrite of the in-game chat window as a plugin.
   It supports:
 
   - Unlimited tabs
@@ -12,8 +12,17 @@ description: |-
   - Completely variable font size
   - Sidebar tabs
   - Unread counts
-  - Emotes
+  - Enhanced Emotes (BetterTTV + 7TV support)
+  - Customizable emote sizes (0.5x to 3.0x scaling)
+  - Multiple streamer emote support
   - Screenshot mode (obfuscate names)
+
+  **Enhanced Emote Features:**
+  - 7TV personal emotes from any Twitch streamer
+  - Easy Twitch user ID lookup integration
+  - Emote conflict resolution (first-wins priority)
+  - Real-time emote size adjustment
+  - Global + personal emote loading
 repo_url: https://github.com/Infiziert90/ChatTwo
 accepts_feedback: true
 tags:
@@ -22,33 +31,33 @@ tags:
   - Chat
   - Replacement
 changelog:  |-
-  **New Feature Added~**
-  - A web interface has been added
-  - *This will not function if your game client is offline or you are logged out of the game*
+  **Enhanced Emote Features by Pox4eveR**
 
-  **Main Features**
-  - View in-game chat on any device that has a web browser functionality
-  - Can send chat messages through the web interface directly into the game itself
-  - Easily copy & paste messages
-  - Option for automatic starting the web interface feature
-  - Log lines render limit for faster loading performance [Default 1000]
+  **🎉 New 7TV Integration:**
+  - Full 7TV emote support alongside existing BetterTTV emotes
+  - Load personal emotes from any Twitch streamer using their user ID
+  - Easy Twitch user ID lookup with built-in browser integration
+  - Support for multiple streamers (comma-separated user IDs)
+  - Automatic emote conflict resolution with priority system
 
-  **Security**
-  - This feature is not intended to be used outside of your local, private network
-  - Do not forward ports that are described inside the chat2 options panel
-  - Never share your authentication code under any circumstances
-  - Multi-box support is not provided, the web interface will track only the first client
+  **🎨 Customizable Emote Sizing:**
+  - Adjustable emote size from 0.5x to 3.0x scaling
+  - Real-time size adjustment with smooth slider
+  - Text remains unaffected - only emotes resize
+  - Works for both BetterTTV and 7TV emotes
+  - Persistent settings across sessions
 
-  **Additional Features soon to be Added**
-  - Display errors as small notifications inside the web interface
+  **🔧 Technical Improvements:**
+  - Updated to .NET 10 and Dalamud 14.0.0 compatibility
+  - Fixed deprecated API usage for better stability
+  - Enhanced emote caching and loading system
+  - Improved error handling and logging
 
-  **Planned Features**
-  - Multiple Tabs support
-  - Browser specific settings
-  - Stylization support
+  **📋 Previous Features:**
+  - Web interface for remote chat access
+  - Unlimited tabs with flexible filtering
+  - RGB channel coloring and variable font sizes
+  - Screenshot mode and unread counts
 
-  **Additional Permissions Note**
-  - Users that wish to expand this to apps or other platforms are welcome to do so
-
-  *Note: An FAQ will be provided in the chat2 thread on the dalamud discord, linked in the About section*
+  *Enhanced by Pox4eveR - Bringing your favorite Twitch emotes to FFXIV!*
 

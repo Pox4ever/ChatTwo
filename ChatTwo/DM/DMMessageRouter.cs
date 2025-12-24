@@ -1,0 +1,643 @@
+using System;
+using ChatTwo.Code;
+using Lumina.Excel.Sheets;
+using Dalamud.Game.Text;
+
+namespace ChatTwo.DM;
+
+/// <summary>
+/// Routes incoming tell messages to appropriate DM interfaces while preserving main chat display.
+/// </summary>
+internal class DMMessageRouter
+{
+    private readonly Plugin _plugin;
+    private DMPlayer? _recentReceiver; // Track the last tell recipient for error message routing
+
+    public DMMessageRouter(Plugin plugin)
+    {
+        _plugin = plugin ?? throw new ArgumentNullException(nameof(plugin));
+    }
+
+    /// <summary>
+    /// Processes an incoming message and routes tells to DM interfaces if appropriate.
+    /// Also handles error messages related to tells.
+    /// </summary>
+    /// <param name="message">The message to process</param>
+    public void ProcessIncomingMessage(Message message)
+    {
+        if (message == null)
+            return;
+
+        try
+        {
+            // Handle tell messages
+            if (message.IsTell())
+            {
+                ProcessTellMessage(message);
+                return;
+            }
+
+            // Handle error messages that might be related to tells
+            if (message.Code.Type == ChatType.Error)
+            {
+                ProcessErrorMessage(message);
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to process incoming message: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Processes tell messages and routes them to DM interfaces.
+    /// </summary>
+    /// <param name="message">The tell message to process</param>
+    private void ProcessTellMessage(Message message)
+    {
+        // Handle incoming and outgoing tells differently
+        if (message.Code.Type == ChatType.TellIncoming)
+        {
+            ProcessIncomingTell(message);
+        }
+        else if (message.Code.Type == ChatType.TellOutgoing)
+        {
+            ProcessOutgoingTell(message);
+        }
+    }
+
+    /// <summary>
+    /// Processes incoming tell messages.
+    /// </summary>
+    /// <param name="message">The incoming tell message</param>
+    private void ProcessIncomingTell(Message message)
+    {
+        // Extract player information from the message
+        var player = message.ExtractPlayerFromMessage();
+        if (player == null)
+        {
+            Plugin.Log.Warning("Could not extract player information from incoming tell message");
+            return;
+        }
+
+        // Apply custom colors if enabled
+        var coloredMessage = ApplyDMColors(message, isIncoming: true);
+
+        // Route the message to DM history
+        var dmManager = DMManager.Instance;
+        dmManager.RouteIncomingTell(coloredMessage);
+
+        // Check if we should auto-open a DM for new tells
+        var hasExistingDM = dmManager.HasOpenDMTab(player) || dmManager.HasOpenDMWindow(player);
+        if (!hasExistingDM && Plugin.Config.AutoOpenDMOnNewTell)
+        {
+            // Auto-open DM based on default mode
+            switch (Plugin.Config.DefaultDMMode)
+            {
+                case Configuration.DMDefaultMode.Window:
+                    // Auto-open DM window for new tells
+                    var dmWindow = dmManager.OpenDMWindow(player, _plugin.ChatLogWindow);
+                    if (dmWindow != null)
+                    {
+                        Plugin.Log.Info($"Auto-opened DM window for new tell from {player.DisplayName}");
+                    }
+                    else
+                    {
+                        Plugin.Log.Warning($"Failed to auto-open DM window for {player.DisplayName}, falling back to tab");
+                        dmManager.OpenDMTab(player);
+                    }
+                    break;
+                case Configuration.DMDefaultMode.Tab:
+                default:
+                    dmManager.OpenDMTab(player);
+                    Plugin.Log.Info($"Auto-opened DM tab for new tell from {player.DisplayName}");
+                    break;
+            }
+        }
+
+        // Route to open DM tabs if they exist
+        var dmTab = dmManager.GetDMTab(player);
+        if (dmTab != null)
+        {
+            dmTab.AddMessage(coloredMessage, unread: true);
+        }
+
+        // Route to open DM windows if they exist
+        var dmWindow2 = dmManager.GetDMWindow(player);
+        if (dmWindow2 != null)
+        {
+            // Add the message to the DM window's internal DMTab
+            dmWindow2.DMTab.AddMessage(coloredMessage, unread: true);
+        }
+    }
+
+    /// <summary>
+    /// Processes outgoing tell messages.
+    /// </summary>
+    /// <param name="message">The outgoing tell message</param>
+    private void ProcessOutgoingTell(Message message)
+    {
+        // CRITICAL FIX: Always try to extract target from current message first
+        // Don't rely on cached _recentReceiver as it causes cross-contamination
+        DMPlayer? targetPlayer = TryExtractTargetFromOutgoingTell(message);
+        
+        if (targetPlayer == null)
+        {
+            // Fallback to recent receiver only if extraction fails
+            targetPlayer = _recentReceiver;
+            Plugin.Log.Debug($"ProcessOutgoingTell: Could not extract target from message, using recent receiver: {targetPlayer?.DisplayName ?? "null"}");
+        }
+        else
+        {
+            Plugin.Log.Debug($"ProcessOutgoingTell: Successfully extracted target from message: {targetPlayer.DisplayName}");
+        }
+        
+        if (targetPlayer == null)
+        {
+            Plugin.Log.Warning("ProcessOutgoingTell: Could not determine target player for outgoing tell");
+            return;
+        }
+        
+        // Update recent receiver for error message routing
+        _recentReceiver = targetPlayer;
+
+        try
+        {
+            var dmManager = DMManager.Instance;
+            
+            // Create a properly formatted outgoing message
+            var modifiedMessage = CreateOutgoingTellMessage(message);
+            
+            Plugin.Log.Debug($"ProcessOutgoingTell: Routing message to {targetPlayer.DisplayName}");
+            
+            // Route to open DM tabs if they exist
+            var dmTab = dmManager.GetDMTab(targetPlayer);
+            if (dmTab != null)
+            {
+                dmTab.AddMessage(modifiedMessage, unread: false);
+                Plugin.Log.Debug($"ProcessOutgoingTell: Routed message to DM tab for {targetPlayer.DisplayName}");
+            }
+
+            // Route to open DM windows if they exist
+            var dmWindow = dmManager.GetDMWindow(targetPlayer);
+            if (dmWindow != null)
+            {
+                // Add the message to the DM window's internal DMTab
+                dmWindow.DMTab.AddMessage(modifiedMessage, unread: false);
+                Plugin.Log.Debug($"ProcessOutgoingTell: Routed message to DM window for {targetPlayer.DisplayName}");
+            }
+
+            // Add to DM history
+            var history = dmManager.GetHistory(targetPlayer);
+            if (history != null)
+            {
+                history.AddMessage(modifiedMessage, isIncoming: false);
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"ProcessOutgoingTell: Exception occurred: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Attempts to extract the target player from an outgoing tell message by parsing recent chat commands.
+    /// </summary>
+    /// <param name="message">The outgoing tell message</param>
+    /// <returns>The target player if found, null otherwise</returns>
+    private DMPlayer? TryExtractTargetFromOutgoingTell(Message message)
+    {
+        try
+        {
+            // Get the last chat message that was sent to see if it was a tell command
+            var lastMessage = _plugin.MessageManager.LastMessage;
+            if (lastMessage.Message != null)
+            {
+                var lastMessageText = lastMessage.Message.ToString();
+                Plugin.Log.Debug($"TryExtractTargetFromOutgoingTell: Last message was: '{lastMessageText}'");
+                
+                // Check if it's a tell command
+                if (lastMessageText.StartsWith("/tell ", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Parse: /tell PlayerName@World message or /tell PlayerName message
+                    var parts = lastMessageText.Split(' ', 3);
+                    if (parts.Length >= 2)
+                    {
+                        var targetName = parts[1];
+                        Plugin.Log.Debug($"TryExtractTargetFromOutgoingTell: Extracted target name: '{targetName}'");
+                        
+                        return ParsePlayerNameWithWorld(targetName);
+                    }
+                }
+            }
+            
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"TryExtractTargetFromOutgoingTell: Exception occurred: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Creates a properly formatted outgoing tell message with sender name and custom colors.
+    /// </summary>
+    /// <param name="originalMessage">The original outgoing tell message</param>
+    /// <returns>Modified message with proper sender formatting and colors</returns>
+    private Message CreateOutgoingTellMessage(Message originalMessage)
+    {
+        try
+        {
+            // Debug logging to understand message structure
+            var originalSender = string.Join("", originalMessage.Sender.Select(c => c.StringValue()));
+            var originalContent = string.Join("", originalMessage.Content.Select(c => c.StringValue()));
+            Plugin.Log.Debug($"CreateOutgoingTellMessage: Original sender='{originalSender}', content='{originalContent}'");
+            
+            // Extract just the message content from the content chunks
+            var messageContent = string.Join("", originalMessage.Content.Select(c => c.StringValue()));
+            
+            // Create a simpler sender format for DM windows
+            var simpleSender = "You: ";
+            
+            Plugin.Log.Debug($"CreateOutgoingTellMessage: Using simple sender format '{simpleSender}', messageContent='{messageContent}'");
+            
+            // Create sender chunks with custom color if enabled
+            var senderChunks = new List<Chunk>();
+            if (Plugin.Config.UseDMCustomColors)
+            {
+                senderChunks.Add(new TextChunk(ChunkSource.Sender, null, simpleSender)
+                {
+                    Foreground = Plugin.Config.DMOutgoingColor
+                });
+            }
+            else
+            {
+                senderChunks.Add(new TextChunk(ChunkSource.Sender, null, simpleSender)
+                {
+                    FallbackColour = ChatType.TellOutgoing
+                });
+            }
+            
+            // Create content chunks with custom color if enabled
+            var contentChunks = new List<Chunk>();
+            if (Plugin.Config.UseDMCustomColors)
+            {
+                contentChunks.Add(new TextChunk(ChunkSource.Content, null, messageContent)
+                {
+                    Foreground = Plugin.Config.DMOutgoingColor
+                });
+            }
+            else
+            {
+                contentChunks.Add(new TextChunk(ChunkSource.Content, null, messageContent)
+                {
+                    FallbackColour = ChatType.TellOutgoing
+                });
+            }
+            
+            return new Message(
+                originalMessage.Receiver,
+                originalMessage.ContentId,
+                originalMessage.AccountId,
+                originalMessage.Code,
+                senderChunks,
+                contentChunks,
+                originalMessage.SenderSource,
+                originalMessage.ContentSource
+            );
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to create outgoing tell message: {ex.Message}");
+            return originalMessage; // Return original if modification fails
+        }
+    }
+
+    /// <summary>
+    /// Processes error messages and routes tell-related errors to DM interfaces.
+    /// </summary>
+    /// <param name="message">The error message to process</param>
+    private void ProcessErrorMessage(Message message)
+    {
+        var messageText = ExtractTextFromMessage(message);
+        
+        // Check if this is a tell-related error message and we have a recent receiver
+        if (_recentReceiver == null)
+        {
+            return;
+        }
+            
+        var tellErrorPatterns = new[]
+        {
+            $"Message to {_recentReceiver.DisplayName} could not be sent.",
+            "Unable to send /tell. Recipient is in a restricted area.",
+            "Your message was not heard. You must wait before using /tell, /say, /yell, or /shout again."
+        };
+
+        var isTellError = tellErrorPatterns.Any(pattern => 
+            messageText.Contains(pattern, StringComparison.OrdinalIgnoreCase));
+
+        if (!isTellError)
+        {
+            // Also check generic patterns
+            var genericPatterns = new[]
+            {
+                "could not be sent",
+                "is not online",
+                "is not accepting tells",
+                "has blocked you",
+                "is busy"
+            };
+            
+            isTellError = genericPatterns.Any(pattern => 
+                messageText.Contains(pattern, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!isTellError)
+        {
+            _recentReceiver = null; // Clear if not a tell error
+            return;
+        }
+
+        var targetPlayer = _recentReceiver;
+        _recentReceiver = null; // Clear after processing
+
+        // Apply custom colors to error message if enabled
+        var coloredMessage = ApplyDMColors(message, isIncoming: false, isError: true);
+
+        // Route the error to the appropriate DM interface
+        var dmManager = DMManager.Instance;
+        
+        // Add to DM tab if it exists
+        var dmTab = dmManager.GetDMTab(targetPlayer);
+        if (dmTab != null)
+        {
+            dmTab.AddMessage(coloredMessage, unread: false);
+        }
+
+        // Add to DM window if it exists (via its internal DMTab)
+        var dmWindow = dmManager.GetDMWindow(targetPlayer);
+        if (dmWindow != null)
+        {
+            // Add the error message to the DM window's internal DMTab
+            dmWindow.DMTab.AddMessage(coloredMessage, unread: false);
+        }
+
+        // Also add to DM history for persistence
+        var history = dmManager.GetHistory(targetPlayer);
+        if (history != null)
+        {
+            history.AddMessage(coloredMessage, isIncoming: false);
+        }
+    }
+
+    /// <summary>
+    /// Extracts text content from a message.
+    /// </summary>
+    /// <param name="message">The message to extract text from</param>
+    /// <returns>The text content of the message</returns>
+    private string ExtractTextFromMessage(Message message)
+    {
+        try
+        {
+            return string.Join("", message.Content.Select(chunk => chunk.StringValue()));
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to extract text from message: {ex.Message}");
+            return string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Extracts a player name from an error message.
+    /// </summary>
+    /// <param name="errorMessage">The error message text</param>
+    /// <returns>The DMPlayer if found, null otherwise</returns>
+    private DMPlayer? ExtractPlayerFromErrorMessage(string errorMessage)
+    {
+        try
+        {
+            // Pattern: "Message to PlayerName could not be sent."
+            var messageToPattern = @"Message to ([^@\s]+(?:@[^@\s]+)?) could not be sent";
+            var match = System.Text.RegularExpressions.Regex.Match(errorMessage, messageToPattern);
+            
+            if (match.Success)
+            {
+                var playerNameWithWorld = match.Groups[1].Value;
+                return ParsePlayerNameWithWorld(playerNameWithWorld);
+            }
+
+            // Pattern: "PlayerName is not online" or similar
+            var isNotPattern = @"^([^@\s]+(?:@[^@\s]+)?) is (?:not online|not accepting tells|busy)";
+            match = System.Text.RegularExpressions.Regex.Match(errorMessage, isNotPattern);
+            
+            if (match.Success)
+            {
+                var playerNameWithWorld = match.Groups[1].Value;
+                return ParsePlayerNameWithWorld(playerNameWithWorld);
+            }
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to extract player from error message '{errorMessage}': {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Parses a player name that may include world information.
+    /// </summary>
+    /// <param name="playerNameWithWorld">Player name potentially with @World suffix</param>
+    /// <returns>DMPlayer instance or null if parsing fails</returns>
+    private DMPlayer? ParsePlayerNameWithWorld(string playerNameWithWorld)
+    {
+        try
+        {
+            if (playerNameWithWorld.Contains('@'))
+            {
+                var parts = playerNameWithWorld.Split('@');
+                if (parts.Length == 2)
+                {
+                    var playerName = parts[0];
+                    var worldName = parts[1];
+                    
+                    // Try to find the world ID from the world name
+                    var worldSheet = Sheets.WorldSheet;
+                    if (worldSheet != null)
+                    {
+                        var world = worldSheet.FirstOrDefault(w => 
+                            string.Equals(w.Name.ToString(), worldName, StringComparison.OrdinalIgnoreCase));
+                        
+                        if (world.RowId != 0)
+                        {
+                            return new DMPlayer(playerName, world.RowId);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                // No world specified, use current player's world
+                var currentWorld = Plugin.ClientState.LocalPlayer?.HomeWorld.RowId ?? 0;
+                if (currentWorld != 0)
+                {
+                    return new DMPlayer(playerNameWithWorld, currentWorld);
+                }
+            }
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to parse player name '{playerNameWithWorld}': {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Tracks an outgoing tell for error message routing.
+    /// </summary>
+    /// <param name="player">The target player</param>
+    public void TrackOutgoingTell(DMPlayer player)
+    {
+        if (player == null)
+        {
+            Plugin.Log.Warning("TrackOutgoingTell: player is null");
+            return;
+        }
+
+        try
+        {
+            // Track the recipient for error message routing
+            _recentReceiver = player;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"TrackOutgoingTell: Exception occurred: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Handles an outgoing tell message and tracks the recipient for error routing.
+    /// </summary>
+    /// <param name="player">The target player</param>
+    /// <param name="message">The outgoing message</param>
+    public void HandleOutgoingTell(DMPlayer player, Message message)
+    {
+        if (player == null || message == null)
+            return;
+
+        try
+        {
+            // Track the recipient for error message routing
+            _recentReceiver = player;
+            
+            var dmManager = DMManager.Instance;
+            dmManager.HandleOutgoingTell(player, message);
+            
+            Plugin.Log.Debug($"Handled outgoing tell to {player.DisplayName} and set as recent receiver");
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to handle outgoing tell: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Determines if a message should be displayed in main chat based on configuration.
+    /// </summary>
+    /// <param name="message">The message to check</param>
+    /// <returns>True if the message should be displayed in main chat, false otherwise</returns>
+    public bool ShouldDisplayInMainChat(Message message)
+    {
+        if (message == null || !message.IsTell())
+            return true; // Non-tell messages always display in main chat
+
+        // Check configuration settings for tell display behavior
+        // For now, always show tells in main chat (default behavior)
+        // This will be enhanced when configuration options are implemented
+        return Plugin.Config.ShowTellsInMainChat;
+    }
+
+    /// <summary>
+    /// Applies custom DM colors to a message if enabled in configuration.
+    /// </summary>
+    /// <param name="message">The message to apply colors to</param>
+    /// <param name="isIncoming">Whether this is an incoming message (true) or outgoing (false)</param>
+    /// <param name="isError">Whether this is an error message</param>
+    /// <returns>A new message with colors applied, or the original message if custom colors are disabled</returns>
+    private Message ApplyDMColors(Message message, bool isIncoming, bool isError = false)
+    {
+        if (!Plugin.Config.UseDMCustomColors)
+            return message;
+
+        try
+        {
+            // Determine the color to use
+            uint color;
+            if (isError)
+            {
+                color = Plugin.Config.DMErrorColor;
+            }
+            else if (isIncoming)
+            {
+                color = Plugin.Config.DMIncomingColor;
+            }
+            else
+            {
+                color = Plugin.Config.DMOutgoingColor;
+            }
+
+            // Create new sender chunks with custom color
+            var newSenderChunks = message.Sender.Select(chunk =>
+            {
+                if (chunk is TextChunk textChunk)
+                {
+                    return new TextChunk(textChunk.Source, textChunk.Link, textChunk.Content)
+                    {
+                        Foreground = color,
+                        Glow = textChunk.Glow,
+                        Italic = textChunk.Italic
+                    };
+                }
+                return chunk;
+            }).ToList();
+
+            // Create new content chunks with custom color
+            var newContentChunks = message.Content.Select(chunk =>
+            {
+                if (chunk is TextChunk textChunk)
+                {
+                    return new TextChunk(textChunk.Source, textChunk.Link, textChunk.Content)
+                    {
+                        Foreground = color,
+                        Glow = textChunk.Glow,
+                        Italic = textChunk.Italic
+                    };
+                }
+                return chunk;
+            }).ToList();
+
+            return new Message(
+                message.Receiver,
+                message.ContentId,
+                message.AccountId,
+                message.Code,
+                newSenderChunks,
+                newContentChunks,
+                message.SenderSource,
+                message.ContentSource
+            );
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to apply DM colors: {ex.Message}");
+            return message; // Return original if coloring fails
+        }
+    }
+}

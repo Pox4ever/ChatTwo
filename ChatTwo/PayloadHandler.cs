@@ -33,6 +33,7 @@ public sealed class PayloadHandler
 
     private ChatLogWindow LogWindow { get; }
     private (Chunk, Payload?)? Popup { get; set; }
+    private bool ShouldOpenPopup { get; set; }
 
     public bool HandleTooltips;
     public uint HoveredItem;
@@ -62,9 +63,18 @@ public sealed class PayloadHandler
     private void DrawPopups()
     {
         if (Popup == null)
+        {
             return;
+        }
 
         var (chunk, payload) = Popup.Value;
+
+        // Open the popup at parent window level only when flag is set
+        if (ShouldOpenPopup)
+        {
+            ImGui.OpenPopup(PopupId);
+            ShouldOpenPopup = false; // Reset flag after opening
+        }
 
         using var popup = ImRaii.Popup(PopupId);
         if (!popup.Success)
@@ -488,7 +498,7 @@ public sealed class PayloadHandler
     private void RightClickPayload(Chunk chunk, Payload? payload)
     {
         Popup = (chunk, payload);
-        ImGui.OpenPopup(PopupId);
+        ShouldOpenPopup = true;
     }
 
     private void DrawItemPopup(ItemPayload payload)
@@ -572,8 +582,8 @@ public sealed class PayloadHandler
 
         var world = player.World;
         if (chunk.Message?.Code.Type == ChatType.FreeCompanyLoginLogout)
-            if (Plugin.ClientState.LocalPlayer?.HomeWorld.IsValid == true)
-                world = Plugin.ClientState.LocalPlayer.HomeWorld;
+            if (Plugin.ObjectTable.LocalPlayer?.HomeWorld.IsValid == true)
+                world = Plugin.ObjectTable.LocalPlayer.HomeWorld;
 
         var name = new List<Chunk> { new TextChunk(ChunkSource.None, null, player.PlayerName) };
         if (world.Value.IsPublic)
@@ -611,7 +621,7 @@ public sealed class PayloadHandler
         {
             var party = Plugin.PartyList;
             var leader = (ulong?) party[(int) party.PartyLeaderIndex]?.ContentId;
-            var isLeader = party.Length == 0 || Plugin.ClientState.LocalContentId == leader;
+            var isLeader = party.Length == 0 || Plugin.PlayerState.ContentId == leader;
             var member = party.FirstOrDefault(member => member.Name.TextValue == player.PlayerName && member.World.RowId == world.RowId);
             var isInParty = member != null;
             var inInstance = GameFunctions.GameFunctions.IsInInstance();
@@ -690,6 +700,76 @@ public sealed class PayloadHandler
         if (validContentId && ImGui.Selectable(Language.Context_AdventurerPlate))
             if (!GameFunctions.GameFunctions.TryOpenAdventurerPlate(chunk.Message!.ContentId))
                 WrapperUtil.AddNotification(Language.Context_AdventurerPlateError, NotificationType.Warning);
+
+        // DM context menu options
+        if ((Plugin.Config.EnableDMTabs || Plugin.Config.EnableDMWindows) && world.Value.IsPublic)
+        {
+            ImGui.Separator();
+            
+            // Check if a DM interface already exists for this player (without focusing it)
+            var dmManager = ChatTwo.DM.DMManager.Instance;
+            var dmPlayer = new ChatTwo.DM.DMPlayer(player.PlayerName, world.RowId);
+            
+            // CRITICAL FIX: Clean up stale references before checking for existing DM interfaces
+            // This prevents showing "Focus Existing DM" when the DM was actually closed
+            dmManager.CleanupStaleReferences();
+            
+            var hasExistingWindow = dmManager.HasOpenDMWindow(dmPlayer);
+            var hasExistingTab = dmManager.HasOpenDMTab(dmPlayer);
+            var hasExistingDM = hasExistingWindow || hasExistingTab;
+            
+            if (hasExistingDM)
+            {
+                // If DM interface already exists, show a "Focus DM" option
+                if (ImGui.Selectable("Focus Existing DM"))
+                {
+                    // Now actually focus the existing DM interface
+                    dmManager.FocusExistingDMInterface(player.PlayerName, world.RowId);
+                }
+            }
+            else
+            {
+                // No existing DM interface, show creation options based on configuration
+                switch (Plugin.Config.DefaultDMMode)
+                {
+                    case Configuration.DMDefaultMode.Tab:
+                        if (Plugin.Config.EnableDMTabs && ImGui.Selectable("Open DM Tab"))
+                        {
+                            dmManager.CreateDMTabFromPlayerInfo(player.PlayerName, world.RowId);
+                        }
+                        // Show window option as secondary if enabled
+                        if (Plugin.Config.EnableDMWindows && ImGui.Selectable("Open DM Window"))
+                        {
+                            dmManager.CreateDMWindowFromPlayerInfo(player.PlayerName, world.RowId, LogWindow);
+                        }
+                        break;
+                        
+                    case Configuration.DMDefaultMode.Window:
+                        if (Plugin.Config.EnableDMWindows && ImGui.Selectable("Open DM Window"))
+                        {
+                            dmManager.CreateDMWindowFromPlayerInfo(player.PlayerName, world.RowId, LogWindow);
+                        }
+                        // Show tab option as secondary if enabled
+                        if (Plugin.Config.EnableDMTabs && ImGui.Selectable("Open DM Tab"))
+                        {
+                            dmManager.CreateDMTabFromPlayerInfo(player.PlayerName, world.RowId);
+                        }
+                        break;
+                        
+                    case Configuration.DMDefaultMode.Ask:
+                        // Show both options with equal priority
+                        if (Plugin.Config.EnableDMTabs && ImGui.Selectable("Open DM Tab"))
+                        {
+                            dmManager.CreateDMTabFromPlayerInfo(player.PlayerName, world.RowId);
+                        }
+                        if (Plugin.Config.EnableDMWindows && ImGui.Selectable("Open DM Window"))
+                        {
+                            dmManager.CreateDMWindowFromPlayerInfo(player.PlayerName, world.RowId, LogWindow);
+                        }
+                        break;
+                }
+            }
+        }
     }
 
     private IPlayerCharacter? FindCharacterForPayload(PlayerPayload payload)

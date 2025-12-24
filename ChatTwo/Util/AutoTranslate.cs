@@ -87,7 +87,7 @@ internal static class AutoTranslate
                     lookup = lookup.Replace(" ", "");
 
                     var (sheetName, selector) = parser.ParseOrThrow(lookup);
-                    var sheet = Plugin.DataManager.Excel.GetSheet<WorkingRawRow>(name: sheetName);
+                    var sheet = Plugin.DataManager.Excel.GetSheet<RawRow>(name: sheetName);
 
                     var columns = new List<int>();
                     var rows = new List<Range>();
@@ -143,7 +143,7 @@ internal static class AutoTranslate
 
                             foreach (var col in columns)
                             {
-                                var rawName = rowParser.RawRow.ReadStringColumn(col);
+                                var rawName = rowParser.ReadStringColumn(col);
                                 var name = rawName.ToDalamudString();
                                 var text = name.TextValue;
                                 if (text.Length > 0)
@@ -181,6 +181,8 @@ internal static class AutoTranslate
         var wholeMatches = new List<AutoTranslateEntry>();
         var prefixMatches = new List<AutoTranslateEntry>();
         var otherMatches = new List<AutoTranslateEntry>();
+        
+        // Add auto-translate entries
         foreach (var entry in AllEntries())
         {
             if (entry.String.Equals(prefix, StringComparison.OrdinalIgnoreCase))
@@ -189,6 +191,23 @@ internal static class AutoTranslate
                 prefixMatches.Add(entry);
             else if (entry.String.Contains(prefix, StringComparison.OrdinalIgnoreCase))
                 otherMatches.Add(entry);
+        }
+        
+        // (Pox4eveR) Add emote entries
+        if (EmoteCache.State == EmoteCache.LoadingState.Done)
+        {
+            foreach (var emoteName in EmoteCache.SortedCodeArray)
+            {
+                // Create a fake auto-translate entry for emotes
+                var emoteEntry = new AutoTranslateEntry(0, 0, emoteName, new Dalamud.Game.Text.SeStringHandling.SeString());
+                
+                if (emoteName.Equals(prefix, StringComparison.OrdinalIgnoreCase))
+                    wholeMatches.Add(emoteEntry);
+                else if (emoteName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    prefixMatches.Add(emoteEntry);
+                else if (emoteName.Contains(prefix, StringComparison.OrdinalIgnoreCase))
+                    otherMatches.Add(emoteEntry);
+            }
         }
 
         if (sort)
@@ -251,16 +270,6 @@ internal static class AutoTranslate
                 start = i;
         }
     }
-}
-
-[Sheet]
-public readonly struct WorkingRawRow(RawRow row) : IExcelRow<WorkingRawRow>
-{
-    public uint RowId => row.RowId;
-    public RawRow RawRow => row;
-
-    static WorkingRawRow IExcelRow<WorkingRawRow>.Create(ExcelPage page, uint offset, uint row) =>
-        new(new RawRow(page, offset, row));
 }
 
 internal interface ISelectorPart { }

@@ -21,12 +21,28 @@ internal static class ColourUtil {
         return new Vector3((float) r / 255, (float) g / 255, (float) b / 255);
     }
 
+    internal static Vector4 RgbaToVector4(uint rgba)
+    {
+        var (r, g, b, a) = RgbaToComponents(rgba);
+        return new Vector4((float) r / 255, (float) g / 255, (float) b / 255, (float) a / 255);
+    }
+
     internal static uint Vector3ToRgba(Vector3 col)
     {
         return ComponentsToRgba(
             (byte) Math.Round(col.X * 255),
             (byte) Math.Round(col.Y * 255),
             (byte) Math.Round(col.Z * 255)
+        );
+    }
+
+    internal static uint Vector4ToRgba(Vector4 col)
+    {
+        return ComponentsToRgba(
+            (byte) Math.Round(col.X * 255),
+            (byte) Math.Round(col.Y * 255),
+            (byte) Math.Round(col.Z * 255),
+            (byte) Math.Round(col.W * 255)
         );
     }
 

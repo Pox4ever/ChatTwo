@@ -389,8 +389,24 @@ internal unsafe class KeybindManager : IDisposable {
             LastRefresh = Environment.TickCount64;
         }
 
+        // CRITICAL FIX: Check if DM windows are causing false positive for text input
+        var vanillaTextInputActive = RaptureAtkModule.Instance()->AtkModule.IsTextInputActive();
+        var hasDMWindows = false;
+        
+        try
+        {
+            // Check if we have DM windows open that might be causing the text input to appear active
+            var dmWindows = ChatTwo.DM.DMManager.Instance.GetOpenDMWindows();
+            hasDMWindows = dmWindows.Any(w => w.IsOpen);
+        }
+        catch
+        {
+            // If DMManager isn't available, fall back to original behavior
+        }
+
         // Vanilla text input has focus
-        if (RaptureAtkModule.Instance()->AtkModule.IsTextInputActive())
+        // MODIFIED: Allow CMD_CHAT to work even when DM windows cause text input to appear active
+        if (vanillaTextInputActive && !hasDMWindows)
         {
             VanillaTextInputHasFocus = true;
             return;
@@ -429,7 +445,9 @@ internal unsafe class KeybindManager : IDisposable {
         foreach (var (toIntercept, keybind) in Keybinds)
         {
             if (toIntercept is "CMD_CHAT" or "CMD_COMMAND" && (ignoreChatOpen || DirectChat))
+            {
                 continue;
+            }
 
             void Intercept(VirtualKey vk, ModifierFlag modifier)
             {
@@ -448,7 +466,9 @@ internal unsafe class KeybindManager : IDisposable {
         }
 
         if (currentBest.Item1 == VirtualKey.NO_KEY)
+        {
             return;
+        }
 
         Plugin.KeyState[currentBest.Item1] = false;
         if (!KeybindsToIntercept.TryGetValue(currentBest.Item2, out var info))

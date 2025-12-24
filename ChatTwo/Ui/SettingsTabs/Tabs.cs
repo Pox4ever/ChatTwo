@@ -1,4 +1,6 @@
+using System.Linq;
 using ChatTwo.Code;
+using ChatTwo.DM;
 using ChatTwo.Resources;
 using ChatTwo.Util;
 using Dalamud.Interface;
@@ -20,6 +22,43 @@ internal sealed class Tabs : ISettingsTab
     {
         Plugin = plugin;
         Mutable = mutable;
+    }
+    
+    /// <summary>
+    /// Checks if a tab is likely a DM tab based on its name pattern.
+    /// This is used as a fallback when DM tabs are deserialized as regular Tab objects.
+    /// </summary>
+    private bool IsLikelyDMTab(Tab tab)
+    {
+        // First check if DMManager recognizes this as a DM player name
+        try
+        {
+            if (DMManager.Instance.IsKnownDMPlayer(tab.Name))
+                return true;
+        }
+        catch
+        {
+            // If DMManager isn't ready, fall back to pattern matching
+        }
+        
+        // Pattern-based detection as fallback
+        // Check if the tab has only Tell chat codes (typical for DM tabs)
+        var hasTellCodes = tab.ChatCodes.ContainsKey(ChatType.TellIncoming) || 
+                          tab.ChatCodes.ContainsKey(ChatType.TellOutgoing);
+        
+        // Check if it has very few chat codes (DM tabs typically only have Tell codes)
+        var hasLimitedChatCodes = tab.ChatCodes.Count <= 3; // Tell incoming, outgoing, and maybe one more
+        
+        // Check if the name doesn't match common tab names
+        var commonTabNames = new[] { "General", "Battle", "Event", "Say", "Shout", "Tell", "Party", "Alliance", "FC", "LS", "CWLS", "Novice Network", "Custom" };
+        var isNotCommonTabName = !commonTabNames.Any(common => tab.Name.Contains(common, StringComparison.OrdinalIgnoreCase));
+        
+        // Check if the name looks like a player name (contains letters and possibly spaces, but not special symbols)
+        var looksLikePlayerName = !string.IsNullOrEmpty(tab.Name) && 
+                                 tab.Name.All(c => char.IsLetter(c) || char.IsWhiteSpace(c) || c == '\'' || c == '-') &&
+                                 tab.Name.Any(char.IsLetter);
+        
+        return hasTellCodes && hasLimitedChatCodes && isNotCommonTabName && looksLikePlayerName;
     }
 
     public void Draw(bool changed)
@@ -48,38 +87,59 @@ internal sealed class Tabs : ISettingsTab
 
         var toRemove = -1;
         var doOpens = ToOpen > -2;
-        for (var i = 0; i < Mutable.Tabs.Count; i++)
+        
+        // Filter out DM tabs from settings display - they shouldn't be configurable here
+        // DM tabs are temporary conversation tabs managed by the DM system, not permanent user-configured tabs
+        // Also filter out tabs that look like DM tabs but were deserialized as regular Tab objects
+        var configurableTabs = Mutable.Tabs
+            .Select((tab, index) => new { tab, index })
+            .Where(x => !(x.tab is DMTab) && !IsLikelyDMTab(x.tab))
+            .ToList();
+        
+        for (var i = 0; i < configurableTabs.Count; i++)
         {
-            var tab = Mutable.Tabs[i];
+            var tabInfo = configurableTabs[i];
+            var tab = tabInfo.tab;
+            var originalIndex = tabInfo.index;
 
             if (doOpens)
                 ImGui.SetNextItemOpen(i == ToOpen);
 
-            using var treeNode = ImRaii.TreeNode($"{tab.Name}###tab-{i}");
+            using var treeNode = ImRaii.TreeNode($"{tab.Name}###tab-{originalIndex}");
             if (!treeNode.Success)
                 continue;
 
-            using var pushedId = ImRaii.PushId($"tab-{i}");
+            using var pushedId = ImRaii.PushId($"tab-{originalIndex}");
 
             if (ImGuiUtil.IconButton(FontAwesomeIcon.TrashAlt, tooltip: Language.Options_Tabs_Delete))
             {
-                toRemove = i;
+                toRemove = originalIndex; // Use original index for removal
                 ToOpen = -1;
             }
 
             ImGui.SameLine();
 
-            if (ImGuiUtil.IconButton(FontAwesomeIcon.ArrowUp, tooltip: Language.Options_Tabs_MoveUp) && i > 0)
+            // For move up/down, we need to work with the original tab list but only among non-DM tabs
+            var canMoveUp = i > 0;
+            var canMoveDown = i < configurableTabs.Count - 1;
+
+            if (ImGuiUtil.IconButton(FontAwesomeIcon.ArrowUp, tooltip: Language.Options_Tabs_MoveUp) && canMoveUp)
             {
-                (Mutable.Tabs[i - 1], Mutable.Tabs[i]) = (Mutable.Tabs[i], Mutable.Tabs[i - 1]);
+                var prevTabInfo = configurableTabs[i - 1];
+                var prevOriginalIndex = prevTabInfo.index;
+                
+                (Mutable.Tabs[prevOriginalIndex], Mutable.Tabs[originalIndex]) = (Mutable.Tabs[originalIndex], Mutable.Tabs[prevOriginalIndex]);
                 ToOpen = i - 1;
             }
 
             ImGui.SameLine();
 
-            if (ImGuiUtil.IconButton(FontAwesomeIcon.ArrowDown, tooltip: Language.Options_Tabs_MoveDown) && i < Mutable.Tabs.Count - 1)
+            if (ImGuiUtil.IconButton(FontAwesomeIcon.ArrowDown, tooltip: Language.Options_Tabs_MoveDown) && canMoveDown)
             {
-                (Mutable.Tabs[i + 1], Mutable.Tabs[i]) = (Mutable.Tabs[i], Mutable.Tabs[i + 1]);
+                var nextTabInfo = configurableTabs[i + 1];
+                var nextOriginalIndex = nextTabInfo.index;
+                
+                (Mutable.Tabs[nextOriginalIndex], Mutable.Tabs[originalIndex]) = (Mutable.Tabs[originalIndex], Mutable.Tabs[nextOriginalIndex]);
                 ToOpen = i + 1;
             }
 
@@ -160,8 +220,13 @@ internal sealed class Tabs : ISettingsTab
 
         if (toRemove > -1)
         {
-            Mutable.Tabs.RemoveAt(toRemove);
-            Plugin.WantedTab = 0;
+            // Don't allow removal of DM tabs through settings - they should be managed through DM system
+            var tabToRemove = Mutable.Tabs[toRemove];
+            if (!(tabToRemove is DMTab))
+            {
+                Mutable.Tabs.RemoveAt(toRemove);
+                Plugin.WantedTab = 0;
+            }
         }
 
         if (doOpens)

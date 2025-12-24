@@ -1,0 +1,255 @@
+using System;
+using ChatTwo.DM;
+using ChatTwo.Resources;
+using ChatTwo.Util;
+using Dalamud.Bindings.ImGui;
+
+namespace ChatTwo.Ui.SettingsTabs;
+
+internal sealed class DirectMessages(Configuration mutable) : ISettingsTab
+{
+    private Configuration Mutable { get; } = mutable;
+    public string Name => "Direct Messages###tabs-direct-messages";
+    
+    // Track previous state to detect changes
+    private static bool? _lastDMSectionPoppedOut = null;
+
+    public void Draw(bool changed)
+    {
+        ImGui.TextUnformatted("Direct Message Settings");
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        // Auto-open DM on new tell
+        var autoOpenDM = Mutable.AutoOpenDMOnNewTell;
+        ImGui.Checkbox("Auto-open DM when receiving new tells", ref autoOpenDM);
+        Mutable.AutoOpenDMOnNewTell = autoOpenDM;
+        ImGuiUtil.HelpText("Automatically opens a DM window or tab when you receive a tell from a new player. The type (window or tab) is determined by the 'Default DM Mode' setting below.");
+        ImGui.Spacing();
+
+        // Default DM mode
+        using (var combo = ImGuiUtil.BeginComboVertical("Default DM Mode", Mutable.DefaultDMMode.Name()))
+        {
+            if (combo.Success)
+            {
+                foreach (var mode in Enum.GetValues<Configuration.DMDefaultMode>())
+                {
+                    if (ImGui.Selectable(mode.Name(), Mutable.DefaultDMMode == mode))
+                        Mutable.DefaultDMMode = mode;
+
+                    if (ImGui.IsItemHovered())
+                        ImGuiUtil.Tooltip(mode.Tooltip() ?? "");
+                }
+            }
+        }
+        ImGuiUtil.HelpText("Choose how DMs should be opened by default when using context menus or auto-opening.");
+        ImGui.Spacing();
+
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        // DM Window Management
+        ImGui.TextUnformatted("Window Management");
+        ImGui.Spacing();
+
+        var enableDMWindows = Mutable.EnableDMWindows;
+        ImGui.Checkbox("Enable DM Windows", ref enableDMWindows);
+        Mutable.EnableDMWindows = enableDMWindows;
+        ImGuiUtil.HelpText("Allow DM conversations to be opened in separate windows that can be moved and resized independently.");
+        ImGui.Spacing();
+
+        var enableDMTabs = Mutable.EnableDMTabs;
+        ImGui.Checkbox("Enable DM Tabs", ref enableDMTabs);
+        Mutable.EnableDMTabs = enableDMTabs;
+        ImGuiUtil.HelpText("Allow DM conversations to be opened as tabs in the main chat window.");
+        ImGui.Spacing();
+
+        var cascadeDMWindows = Mutable.CascadeDMWindows;
+        ImGui.Checkbox("Cascade DM Windows", ref cascadeDMWindows);
+        Mutable.CascadeDMWindows = cascadeDMWindows;
+        ImGuiUtil.HelpText("Position new DM windows in a cascading pattern to avoid overlapping.");
+        ImGui.Spacing();
+
+        if (Mutable.CascadeDMWindows)
+        {
+            ImGui.Indent();
+            var cascadeOffset = Mutable.DMWindowCascadeOffset;
+            ImGui.DragFloat2("Cascade Offset", ref cascadeOffset, 1.0f, 0.0f, 100.0f, "%.0f");
+            Mutable.DMWindowCascadeOffset = cascadeOffset;
+            ImGuiUtil.HelpText("The X and Y offset between cascaded DM windows.");
+            ImGui.Unindent();
+            ImGui.Spacing();
+        }
+
+        var dmSectionPoppedOut = Mutable.DMSectionPoppedOut;
+        ImGui.Checkbox("Pop out DM section", ref dmSectionPoppedOut);
+        
+        // Check if the setting changed using static tracking
+        if (_lastDMSectionPoppedOut.HasValue && dmSectionPoppedOut != _lastDMSectionPoppedOut.Value)
+        {
+            Plugin.Log.Info($"DirectMessages: DM section setting changed from {_lastDMSectionPoppedOut.Value} to {dmSectionPoppedOut}");
+            
+            // Update the setting FIRST in both mutable and plugin config
+            Mutable.DMSectionPoppedOut = dmSectionPoppedOut;
+            Plugin.Config.DMSectionPoppedOut = dmSectionPoppedOut;
+            
+            // Then handle the toggle with the new setting value
+            try
+            {
+                DMManager.Instance.OnDMSectionToggled();
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.Error($"Error handling DM section toggle in settings: {ex.Message}");
+            }
+        }
+        else
+        {
+            // No change, just update the setting normally
+            Mutable.DMSectionPoppedOut = dmSectionPoppedOut;
+        }
+        
+        // Update the tracked value for next frame
+        _lastDMSectionPoppedOut = dmSectionPoppedOut;
+        ImGuiUtil.HelpText("Move all DM tabs to a separate window, leaving only regular chat tabs in the main window.");
+        ImGui.Spacing();
+
+        // Show collapse buttons setting (only when DM section is popped out)
+        if (dmSectionPoppedOut)
+        {
+            var showCollapseButtons = Mutable.ShowDMSectionCollapseButtons;
+            ImGui.Checkbox("Show collapse/expand buttons", ref showCollapseButtons);
+            Mutable.ShowDMSectionCollapseButtons = showCollapseButtons;
+            ImGuiUtil.HelpText("Show collapse/expand buttons in the DM section window header, similar to the Party window.");
+            ImGui.Spacing();
+        }
+
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        // Behavior Settings
+        ImGui.TextUnformatted("Behavior Settings");
+        ImGui.Spacing();
+
+        var closeDMsOnLogout = Mutable.CloseDMsOnLogout;
+        ImGui.Checkbox("Close DMs on logout", ref closeDMsOnLogout);
+        Mutable.CloseDMsOnLogout = closeDMsOnLogout;
+        ImGuiUtil.HelpText("Automatically close all DM windows and tabs when you log out of the game.");
+        ImGui.Spacing();
+
+        var closeDMsInCombat = Mutable.CloseDMsInCombat;
+        ImGui.Checkbox("Close DM windows in combat", ref closeDMsInCombat);
+        Mutable.CloseDMsInCombat = closeDMsInCombat;
+        ImGuiUtil.HelpText("Automatically close DM windows (but not tabs) when entering combat to reduce screen clutter.");
+        ImGui.Spacing();
+
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        // Display Settings
+        ImGui.TextUnformatted("Display Settings");
+        ImGui.Spacing();
+
+        var showTellsInMainChat = Mutable.ShowTellsInMainChat;
+        ImGui.Checkbox("Show tells in main chat", ref showTellsInMainChat);
+        Mutable.ShowTellsInMainChat = showTellsInMainChat;
+        ImGuiUtil.HelpText("Display tell messages in the main chat window in addition to DM interfaces.");
+        ImGui.Spacing();
+
+        var showDMTabIcons = Mutable.ShowDMTabIcons;
+        ImGui.Checkbox("Show DM tab icons", ref showDMTabIcons);
+        Mutable.ShowDMTabIcons = showDMTabIcons;
+        ImGuiUtil.HelpText("Display envelope icons next to DM tab names to distinguish them from regular tabs.");
+        ImGui.Spacing();
+
+        var showUnreadIndicators = Mutable.ShowUnreadIndicators;
+        ImGui.Checkbox("Show unread indicators", ref showUnreadIndicators);
+        Mutable.ShowUnreadIndicators = showUnreadIndicators;
+        ImGuiUtil.HelpText("Display unread message counts on DM tabs and windows.");
+        ImGui.Spacing();
+
+        // DM Tab Suffix
+        var dmTabSuffix = Mutable.DMTabSuffix;
+        ImGui.InputText("DM Tab Suffix", ref dmTabSuffix, 20);
+        Mutable.DMTabSuffix = dmTabSuffix;
+        ImGuiUtil.HelpText("Text to append to DM tab names to distinguish them from regular tabs (e.g., ' (DM)').");
+        ImGui.Spacing();
+
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        // Message History Settings
+        ImGui.TextUnformatted("Message History");
+        ImGui.Spacing();
+
+        var loadDMMessageHistory = Mutable.LoadDMMessageHistory;
+        ImGui.Checkbox("Load previous DM messages", ref loadDMMessageHistory);
+        Mutable.LoadDMMessageHistory = loadDMMessageHistory;
+        ImGuiUtil.HelpText("Load previous conversation history when opening a DM tab or window. Messages are loaded from the database.");
+        ImGui.Spacing();
+
+        if (loadDMMessageHistory)
+        {
+            ImGui.Indent();
+            var historyCount = Mutable.DMMessageHistoryCount;
+            ImGui.SliderInt("Messages to load", ref historyCount, 1, 200);
+            Mutable.DMMessageHistoryCount = historyCount;
+            ImGuiUtil.HelpText($"Number of previous messages to load from history. Current: {historyCount} messages.");
+            ImGui.Unindent();
+            ImGui.Spacing();
+        }
+
+        var saveDMMessages = Mutable.SaveDMMessages;
+        ImGui.Checkbox("Save DM messages to database", ref saveDMMessages);
+        Mutable.SaveDMMessages = saveDMMessages;
+        ImGuiUtil.HelpText("Save tell messages to the database for persistent history. Uses the same database as regular chat messages.");
+        ImGui.Spacing();
+
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        // Color Settings
+        ImGui.TextUnformatted("Color Settings");
+        ImGui.Spacing();
+
+        var useDMCustomColors = Mutable.UseDMCustomColors;
+        ImGui.Checkbox("Use custom DM colors", ref useDMCustomColors);
+        Mutable.UseDMCustomColors = useDMCustomColors;
+        ImGuiUtil.HelpText("Use custom colors for DM messages instead of default chat colors. When disabled, uses standard FFXIV tell colors.");
+        ImGui.Spacing();
+
+        if (useDMCustomColors)
+        {
+            ImGui.Indent();
+            
+            // Incoming message color
+            var incomingColor = ColourUtil.RgbaToVector4(Mutable.DMIncomingColor);
+            if (ImGui.ColorEdit4("Incoming message color", ref incomingColor, ImGuiColorEditFlags.NoInputs | ImGuiColorEditFlags.AlphaPreviewHalf))
+            {
+                Mutable.DMIncomingColor = ColourUtil.Vector4ToRgba(incomingColor);
+            }
+            ImGuiUtil.HelpText("Color for messages received from other players in DM windows and tabs.");
+            ImGui.Spacing();
+
+            // Outgoing message color
+            var outgoingColor = ColourUtil.RgbaToVector4(Mutable.DMOutgoingColor);
+            if (ImGui.ColorEdit4("Outgoing message color", ref outgoingColor, ImGuiColorEditFlags.NoInputs | ImGuiColorEditFlags.AlphaPreviewHalf))
+            {
+                Mutable.DMOutgoingColor = ColourUtil.Vector4ToRgba(outgoingColor);
+            }
+            ImGuiUtil.HelpText("Color for messages you send in DM windows and tabs (\"You:\" messages).");
+            ImGui.Spacing();
+
+            // Error message color
+            var errorColor = ColourUtil.RgbaToVector4(Mutable.DMErrorColor);
+            if (ImGui.ColorEdit4("Error message color", ref errorColor, ImGuiColorEditFlags.NoInputs | ImGuiColorEditFlags.AlphaPreviewHalf))
+            {
+                Mutable.DMErrorColor = ColourUtil.Vector4ToRgba(errorColor);
+            }
+            ImGuiUtil.HelpText("Color for error messages related to tells (e.g., \"Message could not be sent\").");
+            
+            ImGui.Unindent();
+            ImGui.Spacing();
+        }
+    }
+}

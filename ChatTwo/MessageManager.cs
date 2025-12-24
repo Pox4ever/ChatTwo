@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using ChatTwo.Code;
+using ChatTwo.DM;
 using ChatTwo.Resources;
 using ChatTwo.Util;
 using Dalamud.Game.Text;
@@ -42,7 +43,7 @@ internal class MessageManager : IAsyncDisposable
     {
         get
         {
-            var contentId = Plugin.ClientState.LocalContentId;
+            var contentId = Plugin.PlayerState.ContentId;
             return contentId == 0 ? LastContentId : contentId;
         }
     }
@@ -98,7 +99,7 @@ internal class MessageManager : IAsyncDisposable
 
     private void OnFrameworkUpdate(IFramework framework)
     {
-        var contentId = Plugin.ClientState.LocalContentId;
+        var contentId = Plugin.PlayerState.ContentId;
         if (contentId != 0)
             LastContentId = contentId;
 
@@ -132,7 +133,17 @@ internal class MessageManager : IAsyncDisposable
     internal void ClearAllTabs()
     {
         foreach (var tab in Plugin.Config.Tabs)
+        {
+            // Don't clear DM tabs - they manage their own messages and clearing them
+            // causes message content to be lost or mixed up during settings save
+            if (tab is ChatTwo.DM.DMTab)
+            {
+                Plugin.Log.Debug($"ClearAllTabs: Skipping DM tab {tab.Name}");
+                continue;
+            }
+            
             tab.Clear();
+        }
     }
 
     internal void FilterAllTabs()
@@ -145,7 +156,13 @@ internal class MessageManager : IAsyncDisposable
 
         // We store the pending messages to be added to the chat log in a
         // temporary list, and apply them all at once after filtering.
-        var pendingTabs = Plugin.Config.Tabs.Select(tab => (tab, new List<Message>())).ToList();
+        // Skip DM tabs - they manage their own messages and filtering them here
+        // causes message content to be mixed up between different DM tabs
+        var pendingTabs = Plugin.Config.Tabs
+            .Where(tab => !(tab is ChatTwo.DM.DMTab))
+            .Select(tab => (tab, new List<Message>()))
+            .ToList();
+            
         foreach (var message in messages)
             foreach (var (_, pendingMessages) in pendingTabs.Where(ptab => ptab.Item1.Matches(message)))
                 pendingMessages.Add(message);
@@ -258,6 +275,9 @@ internal class MessageManager : IAsyncDisposable
         var contentChunks = ChunkUtil.ToChunks(pendingMessage.Content, ChunkSource.Content, chatCode.Type).ToList();
         var message = new Message(CurrentContentId, pendingMessage.ContentId, pendingMessage.AccountId, chatCode, senderChunks, contentChunks, pendingMessage.Sender, pendingMessage.Content);
 
+        // Route DM messages through the DM system
+        Plugin.DMMessageRouter.ProcessIncomingMessage(message);
+
         if (Plugin.Config.DatabaseBattleMessages || !message.Code.IsBattle())
             Store.UpsertMessage(message);
 
@@ -265,6 +285,14 @@ internal class MessageManager : IAsyncDisposable
         var currentMatches = Plugin.CurrentTab.Matches(message);
         foreach (var tab in Plugin.Config.Tabs)
         {
+            // Skip DM tabs - they are handled by DMMessageRouter to prevent duplication
+            if (tab is ChatTwo.DM.DMTab)
+                continue;
+
+            // Check if this is a tell message and if it should be shown in main chat
+            if (message.IsTell() && !Plugin.Config.ShowTellsInMainChat)
+                continue;
+
             var unread = !(tab.UnreadMode == UnreadMode.Unseen && Plugin.CurrentTab != tab && currentMatches);
 
             if (tab.Matches(message))

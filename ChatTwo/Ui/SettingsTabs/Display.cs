@@ -115,5 +115,90 @@ internal sealed class Display : ISettingsTab
             ImGuiUtil.OptionCheckbox(ref Mutable.CollapseKeepUniqueLinks, Language.Options_CollapseDuplicateMsgUniqueLink_Name, Language.Options_CollapseDuplicateMsgUniqueLink_Description);
         }
         ImGui.Spacing();
+
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        // Modern UI Settings Section - directly visible
+        ImGui.Text("Modern UI Settings");
+        ImGui.Spacing();
+        
+        ImGuiUtil.OptionCheckbox(ref Mutable.ModernUIEnabled, "Enable Modern UI", "Enables modern styling with rounded corners, better colors, and improved visual hierarchy");
+        ImGui.Spacing();
+
+        if (Mutable.ModernUIEnabled)
+        {
+            using var _ = ImRaii.PushIndent();
+            
+            ImGuiUtil.OptionCheckbox(ref Mutable.UseModernColors, "Use Modern Color Scheme", "Apply a modern dark color scheme with better contrast and visual appeal");
+            ImGui.Spacing();
+
+            ImGui.Text("UI Rounding");
+            ImGui.SetNextItemWidth(200);
+            ImGui.SliderFloat("##ui-rounding", ref Mutable.UIRounding, 0.0f, 12.0f, "%.1f");
+            ImGuiUtil.HelpText("Controls the roundness of corners for UI elements");
+            ImGui.Spacing();
+
+            ImGui.Text("Border Size");
+            ImGui.SetNextItemWidth(200);
+            ImGui.SliderFloat("##ui-border", ref Mutable.UIBorderSize, 0.0f, 3.0f, "%.1f");
+            ImGuiUtil.HelpText("Controls the thickness of borders around UI elements");
+            ImGui.Spacing();
+
+            ImGui.Text("Shadow Strength");
+            ImGui.SetNextItemWidth(200);
+            ImGui.SliderFloat("##shadow-strength", ref Mutable.ShadowStrength, 0.0f, 1.0f, "%.2f");
+            ImGuiUtil.HelpText("Controls the intensity of shadows and depth effects");
+            ImGui.Spacing();
+            
+            ImGui.Separator();
+            ImGui.Text("Enhanced Input Area");
+            ImGui.Spacing();
+            
+            ImGuiUtil.OptionCheckbox(ref Mutable.ShowFloatingChannelIndicator, "Show Floating Channel Indicator", "Display a floating pill showing the current channel when typing");
+            ImGui.Spacing();
+            
+            ImGuiUtil.OptionCheckbox(ref Mutable.ShowTypingIndicator, "Show Typing Indicator", "Display animated dots when you're typing a message");
+            ImGui.Spacing();
+            
+            ImGuiUtil.OptionCheckbox(ref Mutable.EnhancedInputFeedback, "Enhanced Input Visual Feedback", "Improved visual feedback with focus states and error highlighting");
+            ImGui.Spacing();
+            
+            ImGui.Text("Unfocused Window Transparency");
+            ImGui.SetNextItemWidth(200);
+            ImGui.SliderFloat("##unfocused-transparency", ref Mutable.UnfocusedTransparency, 10.0f, 100.0f, "%.0f%%");
+            ImGuiUtil.HelpText("Transparency level for unfocused DM windows (lower = more transparent)");
+            ImGui.Spacing();
+            
+            ImGui.Separator();
+            ImGui.Text("Better Tab System");
+            ImGui.Spacing();
+            
+            ImGuiUtil.OptionCheckbox(ref Mutable.ShowTabIcons, "Show Tab Icons", "Display icons in tabs based on their primary chat type");
+            ImGui.Spacing();
+            
+            ImGuiUtil.OptionCheckbox(ref Mutable.EnableTabDragReorder, "Enable Tab Drag & Drop", "Allow reordering tabs by dragging and dropping them");
+            ImGui.Spacing();
+            
+            ImGuiUtil.OptionCheckbox(ref Mutable.SmoothTabTransitions, "Smooth Tab Transitions", "Apply subtle animations and transitions to tab interactions");
+            ImGui.Spacing();
+            
+            ImGui.Separator();
+            ImGui.Text("Enhanced Emote Integration");
+            ImGui.Spacing();
+            
+            ImGuiUtil.OptionCheckbox(ref Mutable.ShowInlineEmotePreviews, "Show Inline Emote Previews", "Display small emote previews next to emote names in the input field");
+            ImGui.Spacing();
+            
+            ImGuiUtil.OptionCheckbox(ref Mutable.EnableEmotePickerPopup, "Enable Emote Picker Popup", "Show an emote picker button next to the input field for easy emote selection");
+            ImGui.Spacing();
+            
+            if (Mutable.EnableEmotePickerPopup)
+            {
+                using var indent = ImRaii.PushIndent();
+                ImGuiUtil.OptionCheckbox(ref Mutable.EmotePickerSearchEnabled, "Enable Emote Search", "Allow searching for emotes in the emote picker popup");
+                ImGui.Spacing();
+            }
+        }
     }
 }
