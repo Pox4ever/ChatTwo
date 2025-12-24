@@ -28,8 +28,8 @@ jobs:
         
     - name: Download Dalamud Latest
       run: |
-        Invoke-WebRequest -Uri https://goatcorp.github.io/dalamud-distrib/latest.zip -OutFile latest.zip
-        Expand-Archive -Force latest.zip "$env:AppData\XIVLauncher\addon\Hooks\dev"
+        Invoke-WebRequest -Uri https://goatcorp.github.io/dalamud-distrib/latest.zip -OutFile dalamud.zip
+        Expand-Archive -Force dalamud.zip "$env:AppData\XIVLauncher\addon\Hooks\dev"
         
     - name: Restore NuGet Packages
       run: nuget restore ChatTwo\ChatTwo.csproj
@@ -80,7 +80,7 @@ jobs:
         
     - name: Create Release Zip
       run: |
-        Compress-Archive -Path Artifact\* -DestinationPath latest.zip
+        Compress-Archive -Force -Path Artifact\* -DestinationPath latest.zip
         
     - name: Create Release
       uses: softprops/action-gh-release@v2
