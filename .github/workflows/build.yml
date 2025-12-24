@@ -6,14 +6,11 @@ on:
       - 'v*'
   workflow_dispatch:
 
-env:
-  DALAMUD_HOME: /tmp/dalamud
-
 jobs:
   build:
     permissions:
       contents: write
-    runs-on: windows-latest
+    runs-on: windows-2022
     
     steps:
     - name: Checkout Repository
@@ -27,10 +24,13 @@ jobs:
         }
         "tag=$tag" | Out-File -Append -FilePath $Env:GITHUB_ENV
         
-    - name: Set up .NET
-      uses: actions/setup-dotnet@v4
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v1.1
       with:
-        dotnet-version: 8.0.x
+        vs-prerelease: true
+        
+    - name: Setup NuGet
+      uses: NuGet/setup-nuget@v1.0.5
         
     - name: Download Dalamud Latest
       run: |
@@ -38,24 +38,33 @@ jobs:
         Expand-Archive -Force latest.zip "$env:AppData\XIVLauncher\addon\Hooks\dev"
         
     - name: Restore NuGet Packages
-      run: dotnet restore ChatTwo.sln
+      run: nuget restore ChatTwo.sln
       
     - name: Build Plugin
-      run: dotnet build --no-restore -c Release ChatTwo.sln
+      run: msbuild ChatTwo.sln /p:Configuration=Release
       
-    - name: Create Plugin Directory
+    - name: Extract Plugin Files
       run: |
-        New-Item -ItemType Directory -Force -Path plugin
-        Copy-Item "ChatTwo\bin\Release\net8.0-windows\ChatTwo.dll" plugin\
-        Copy-Item "ChatTwo\bin\Release\net8.0-windows\ChatTwo.json" plugin\
-        if (Test-Path "ChatTwo\bin\Release\net8.0-windows\ChatTwo.pdb") {
-          Copy-Item "ChatTwo\bin\Release\net8.0-windows\ChatTwo.pdb" plugin\
+        # Find the latest.zip file created by DalamudPackager
+        $latestZip = Get-ChildItem -Path "ChatTwo\bin\x64\Release" -Name "latest.zip" -Recurse | Select-Object -First 1
+        if ($latestZip) {
+          $zipPath = "ChatTwo\bin\x64\Release\$latestZip"
+          Write-Host "Found latest.zip at: $zipPath"
+          Expand-Archive -Force $zipPath ./Artifact
+        } else {
+          Write-Host "No latest.zip found, creating manually..."
+          New-Item -ItemType Directory -Force -Path Artifact
+          Copy-Item "ChatTwo\bin\x64\Release\ChatTwo.dll" Artifact\
+          Copy-Item "ChatTwo\bin\x64\Release\ChatTwo.json" Artifact\
+          if (Test-Path "ChatTwo\bin\x64\Release\ChatTwo.pdb") {
+            Copy-Item "ChatTwo\bin\x64\Release\ChatTwo.pdb" Artifact\
+          }
         }
-        Get-ChildItem plugin
+        Get-ChildItem Artifact
         
     - name: Create Release Zip
       run: |
-        Compress-Archive -Path plugin\* -DestinationPath latest.zip
+        Compress-Archive -Path Artifact\* -DestinationPath latest.zip
         
     - name: Create Release
       uses: softprops/action-gh-release@v2
