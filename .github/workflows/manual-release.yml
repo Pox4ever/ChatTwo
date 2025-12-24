@@ -1,0 +1,72 @@
+name: Manual Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v1.32.1)'
+        required: true
+        default: 'v1.32.1'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      
+    - name: Create plugin directory
+      run: |
+        mkdir -p plugin
+        
+    - name: Check for pre-built files
+      run: |
+        echo "Looking for pre-built files..."
+        find . -name "ChatTwo.dll" -type f
+        find . -name "ChatTwo.json" -type f
+        
+    - name: Copy pre-built files
+      run: |
+        # Copy from bin/Release if they exist
+        if [ -f "ChatTwo/bin/Release/ChatTwo.dll" ]; then
+          cp "ChatTwo/bin/Release/ChatTwo.dll" plugin/
+          echo "Copied DLL from bin/Release"
+        fi
+        
+        if [ -f "ChatTwo/bin/Release/ChatTwo.json" ]; then
+          cp "ChatTwo/bin/Release/ChatTwo.json" plugin/
+          echo "Copied JSON from bin/Release"
+        fi
+        
+        # Fallback to root JSON
+        if [ ! -f "plugin/ChatTwo.json" ] && [ -f "ChatTwo.json" ]; then
+          cp "ChatTwo.json" plugin/
+          echo "Copied JSON from root"
+        fi
+        
+        # Copy PDB if exists
+        if [ -f "ChatTwo/bin/Release/ChatTwo.pdb" ]; then
+          cp "ChatTwo/bin/Release/ChatTwo.pdb" plugin/
+          echo "Copied PDB"
+        fi
+        
+        echo "Plugin directory contents:"
+        ls -la plugin/
+        
+    - name: Create release zip
+      run: |
+        cd plugin
+        zip -r ../latest.zip .
+        cd ..
+        
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ github.event.inputs.version }}
+        files: |
+          latest.zip
+          repo.json
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

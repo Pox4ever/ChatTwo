@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+env:
+  DALAMUD_HOME: /tmp/dalamud
+
 jobs:
   build:
     runs-on: windows-latest
@@ -21,18 +24,76 @@ jobs:
       with:
         dotnet-version: '10.0.x'
         
+    - name: Download Dalamud
+      run: |
+        $dalamudPath = "$env:AppData\XIVLauncher\addon\Hooks\dev"
+        New-Item -ItemType Directory -Force -Path $dalamudPath
+        Invoke-WebRequest -Uri "https://goatcorp.github.io/dalamud-distrib/stg/latest.zip" -OutFile "dalamud.zip"
+        Expand-Archive -Force "dalamud.zip" $dalamudPath
+      shell: powershell
+        
     - name: Restore dependencies
-      run: dotnet restore ChatTwo.sln
+      run: dotnet restore
       
     - name: Build
-      run: dotnet build ChatTwo.sln --configuration Release --no-restore
+      run: dotnet build --configuration Release --no-restore
+      env:
+        DALAMUD_HOME: ${{ env.DALAMUD_HOME }}
       
     - name: Create plugin directory
       run: |
-        mkdir plugin
-        Copy-Item "ChatTwo/bin/Release/ChatTwo.dll" "plugin/"
-        Copy-Item "ChatTwo/bin/Release/ChatTwo.json" "plugin/"
-        Copy-Item "ChatTwo/bin/Release/ChatTwo.pdb" "plugin/" -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path "plugin"
+        
+        # Try different possible output paths
+        $possiblePaths = @(
+          "ChatTwo/bin/Release/net10.0-windows/ChatTwo.dll",
+          "ChatTwo/bin/Release/ChatTwo.dll"
+        )
+        
+        foreach ($path in $possiblePaths) {
+          if (Test-Path $path) {
+            Copy-Item $path "plugin/"
+            Write-Host "Found DLL at: $path"
+            break
+          }
+        }
+        
+        # Copy JSON files
+        $jsonPaths = @(
+          "ChatTwo/bin/Release/net10.0-windows/ChatTwo.json",
+          "ChatTwo/bin/Release/ChatTwo.json",
+          "ChatTwo.json"
+        )
+        
+        foreach ($path in $jsonPaths) {
+          if (Test-Path $path) {
+            Copy-Item $path "plugin/"
+            Write-Host "Found JSON at: $path"
+            break
+          }
+        }
+        
+        # Copy PDB if exists
+        $pdbPaths = @(
+          "ChatTwo/bin/Release/net10.0-windows/ChatTwo.pdb",
+          "ChatTwo/bin/Release/ChatTwo.pdb"
+        )
+        
+        foreach ($path in $pdbPaths) {
+          if (Test-Path $path) {
+            Copy-Item $path "plugin/"
+            Write-Host "Found PDB at: $path"
+            break
+          }
+        }
+        
+        # List what we found
+        Write-Host "Plugin directory contents:"
+        Get-ChildItem "plugin/" | ForEach-Object { Write-Host $_.Name }
+        
+        # Debug: List all build outputs
+        Write-Host "All build outputs:"
+        Get-ChildItem -Recurse "ChatTwo/bin/" -ErrorAction SilentlyContinue | Select-Object FullName
       shell: powershell
       
     - name: Create release zip
@@ -50,7 +111,9 @@ jobs:
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        files: latest.zip
+        files: |
+          latest.zip
+          repo.json
         generate_release_notes: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
