@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+env:
+  DALAMUD_HOME: /tmp/dalamud
+
 jobs:
   build:
     permissions:
