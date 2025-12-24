@@ -78,8 +78,8 @@ internal class DMWindow : Window
         // Create a DMTab for this window to handle message filtering and display
         DMTab = new DMTab(player);
 
-        // Configure window properties with better default size
-        Size = new Vector2(350, 400);
+        // Configure window properties with same size as main chat window
+        Size = new Vector2(500, 250);
         SizeCondition = ImGuiCond.FirstUseEver;
 
         // Apply cascading positioning if enabled
@@ -170,8 +170,8 @@ internal class DMWindow : Window
             // Load messages from the persistent MessageStore database
             var loadedMessages = new List<Message>();
             
-            // Query the MessageStore for tell messages with a reasonable search limit
-            var searchLimit = Math.Max(1000, historyCount * 10); // Search more messages to find enough relevant ones
+            // Query the MessageStore for tell messages with unlimited search to find all messages regardless of age
+            var searchLimit = Math.Max(50000, historyCount * 100); // Significantly increased search limit to find all messages
             using (var messageEnumerator = ChatLogWindow.Plugin.MessageManager.Store.GetMostRecentMessages(count: searchLimit))
             {
                 foreach (var message in messageEnumerator)

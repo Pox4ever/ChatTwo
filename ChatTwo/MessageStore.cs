@@ -113,7 +113,7 @@ public class SeStringMessagePackFormatter : IMessagePackFormatter<SeString>
 
 internal class MessageStore : IDisposable
 {
-    private const int MessageQueryLimit = 10_000;
+    private const int MessageQueryLimit = 100_000;
 
     private string DbPath { get; }
 

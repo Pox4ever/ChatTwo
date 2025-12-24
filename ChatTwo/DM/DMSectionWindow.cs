@@ -37,7 +37,7 @@ public sealed class DMSectionWindow : Window
         ChatLogWindow = chatLogWindow;
         
         // Copy the EXACT same window setup as ChatLogWindow
-        Size = new Vector2(500, 400);
+        Size = new Vector2(500, 250);
         SizeCondition = ImGuiCond.FirstUseEver;
         
         // Use the same position condition as main chat
