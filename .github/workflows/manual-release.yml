@@ -32,10 +32,10 @@ jobs:
         Expand-Archive -Force latest.zip "$env:AppData\XIVLauncher\addon\Hooks\dev"
         
     - name: Restore NuGet Packages
-      run: nuget restore ChatTwo.sln
+      run: nuget restore ChatTwo\ChatTwo.csproj
       
     - name: Build Plugin
-      run: msbuild ChatTwo.sln /p:Configuration=Release
+      run: msbuild ChatTwo\ChatTwo.csproj /p:Configuration=Release
       
     - name: Extract Plugin Files
       run: |
