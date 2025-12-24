@@ -49,6 +49,9 @@ public sealed class DMSectionWindow : Window
         RespectCloseHotkey = false;
         DisableWindowSounds = true;
         
+        // Set base window flags to prevent outer scrolling
+        Flags = ImGuiWindowFlags.NoScrollbar;
+        
         if (!Plugin.Config.CanMove)
             Flags |= ImGuiWindowFlags.NoMove;
         if (!Plugin.Config.CanResize)
@@ -270,68 +273,12 @@ public sealed class DMSectionWindow : Window
         }
     }
 
-    private void DrawDMTabContent(DMTab dmTab)
-    {
-        // Add DM tab action buttons at the top
-        var buttonSize = ImGui.GetFrameHeight() * 0.8f;
-        
-        // Pop out button
-        using (ModernUI.PushModernButtonStyle(Plugin.Config))
-        {
-            if (ImGuiUtil.IconButton(FontAwesomeIcon.ExternalLinkAlt, id: "##dm-section-popout", width: (int)buttonSize))
-            {
-                DMManager.Instance.ConvertTabToWindow(dmTab.Player);
-            }
-        }
-        
-        if (ImGui.IsItemHovered())
-            ModernUI.DrawModernTooltip("Pop Out to DM Window", Plugin.Config);
-        
-        ImGui.SameLine();
-        
-        // Close button
-        using (ModernUI.PushModernButtonStyle(Plugin.Config))
-        {
-            if (ImGuiUtil.IconButton(FontAwesomeIcon.Times, id: "##dm-section-close", width: (int)buttonSize))
-            {
-                DMManager.Instance.CloseDMTab(dmTab.Player);
-            }
-        }
-        
-        if (ImGui.IsItemHovered())
-            ModernUI.DrawModernTooltip("Close DM Tab", Plugin.Config);
-        
-        // Add some spacing after buttons
-        ImGui.Spacing();
-        
-        // Calculate space for input area
-        var inputHeight = ImGui.GetFrameHeight() * 2 + ImGui.GetStyle().ItemSpacing.Y * 0.5f;
-        var messageHeight = ImGui.GetContentRegionAvail().Y - inputHeight;
-        
-        // Ensure minimum space for input
-        if (messageHeight < 50)
-        {
-            messageHeight = 50;
-            inputHeight = ImGui.GetContentRegionAvail().Y - messageHeight;
-        }
-        
-        // Draw message log
-        ChatLogWindow.DrawMessageLog(dmTab, ChatLogWindow.PayloadHandler, messageHeight, false);
-        
-        // Draw channel name (always shows "Tell PlayerName" for DM tabs)
-        using (ImRaii.PushStyle(ImGuiStyleVar.ItemSpacing, new Vector2(0, 2)))
-        {
-            DrawDMChannelName(dmTab);
-        }
-        
-        // Draw input area for DM
-        DrawDMInput(dmTab);
-    }
+    // REMOVED: This method was creating duplicate buttons above the input field
 
     private void DrawDMTabContentWithoutButtons(DMTab dmTab)
     {
-        // Calculate space for input area
-        var inputHeight = ImGui.GetFrameHeight() * 2 + ImGui.GetStyle().ItemSpacing.Y * 0.5f;
+        // Calculate space for input area (increased to account for bottom spacing)
+        var inputHeight = ImGui.GetFrameHeight() * 2 + ImGui.GetStyle().ItemSpacing.Y * 2.5f;
         var messageHeight = ImGui.GetContentRegionAvail().Y - inputHeight;
         
         // Ensure minimum space for input
@@ -359,18 +306,22 @@ public sealed class DMSectionWindow : Window
     {
         using (ImRaii.PushStyle(ImGuiStyleVar.ItemSpacing, new Vector2(ImGui.GetStyle().ItemSpacing.X, 2)))
         {
-            // Calculate the actual Send button width to ensure consistent alignment
-            var sendButtonTextSize = ImGui.CalcTextSize("Send");
-            var sendButtonWidth = sendButtonTextSize.X + (ImGui.GetStyle().FramePadding.X * 2);
-            var inputWidth = ImGui.GetContentRegionAvail().X - sendButtonWidth - ImGui.GetStyle().ItemSpacing.X;
-            
-            ImGui.SetNextItemWidth(inputWidth);
             
             var placeholder = $"Message {dmTab.Player.Name}...";
             var inputFlags = ImGuiInputTextFlags.EnterReturnsTrue;
             
-            // Track if we should maintain focus
-            var shouldMaintainFocus = false;
+            // Calculate input width by measuring button size (same approach as main chat)
+            // We need to account for 2 buttons on the right side
+            var numButtons = 2; // Close and Pop Out buttons
+            var spacing = ImGui.GetStyle().ItemSpacing.X;
+            
+            // Estimate button width based on frame height (this is close enough for width calculation)
+            var estimatedButtonWidth = ImGui.GetFrameHeight();
+            var totalButtonWidth = estimatedButtonWidth * numButtons + spacing * (numButtons - 1);
+            // Add extra margin to ensure buttons and resize grip don't overlap (increased margin for resize grip)
+            var inputWidth = ImGui.GetContentRegionAvail().X - totalButtonWidth - spacing * 5;
+            
+            ImGui.SetNextItemWidth(inputWidth);
             
             // CRITICAL FIX: Focus input field when tab is focused via "Focus DM" OR maintain focus after sending (if enabled)
             if (_focusInputField || (_maintainInputFocus && Plugin.Config.KeepInputFocus))
@@ -414,124 +365,49 @@ public sealed class DMSectionWindow : Window
             
             ImGui.SameLine();
             
-            // Send button
-            var sendEnabled = !string.IsNullOrWhiteSpace(_dmSectionInput);
-            using var disabled = ImRaii.Disabled(!sendEnabled);
-            
-            if (ImGui.Button("Send") && sendEnabled)
-            {
-                var tellCommand = $"/tell {dmTab.Player.DisplayName} {_dmSectionInput.Trim()}";
-                Plugin.DMMessageRouter.TrackOutgoingTell(dmTab.Player);
-                ChatBox.SendMessage(tellCommand);
-                _dmSectionInput = string.Empty;
-                _maintainInputFocus = true; // Maintain focus after sending
-            }
-        }
-    }
-
-    private void DrawDMInputWithButtons(DMTab dmTab)
-    {
-        using (ImRaii.PushStyle(ImGuiStyleVar.ItemSpacing, new Vector2(ImGui.GetStyle().ItemSpacing.X, 2)))
-        {
-            // First, draw the action buttons on their own line, aligned to the right
-            var buttonSize = ImGui.GetFrameHeight() * 0.8f;
-            var totalButtonWidth = (buttonSize * 2) + ImGui.GetStyle().ItemSpacing.X;
-            var availableWidth = ImGui.GetContentRegionAvail().X;
-            
-            // Position buttons on the right side
-            ImGui.SetCursorPosX(ImGui.GetCursorPosX() + availableWidth - totalButtonWidth);
-            
-            // Pop out button with proper FontAwesome icon
+            // Close DM Tab button (same style as main chat settings button) - match input height
             using (ModernUI.PushModernButtonStyle(Plugin.Config))
+            using (ImRaii.PushStyle(ImGuiStyleVar.FramePadding, new Vector2(ImGui.GetStyle().FramePadding.X, ImGui.GetStyle().FramePadding.Y * 1.2f)))
             {
-                if (ImGuiUtil.IconButton(FontAwesomeIcon.ExternalLinkAlt, id: "##dm-popout-input", width: (int)buttonSize))
+                if (ImGuiUtil.IconButton(FontAwesomeIcon.Times))
                 {
-                    DMManager.Instance.ConvertTabToWindow(dmTab.Player);
-                }
-            }
-            
-            if (ImGui.IsItemHovered())
-                ModernUI.DrawModernTooltip("Pop Out to DM Window", Plugin.Config);
-            
-            ImGui.SameLine();
-            
-            // Close button with proper FontAwesome icon
-            using (ModernUI.PushModernButtonStyle(Plugin.Config))
-            {
-                if (ImGuiUtil.IconButton(FontAwesomeIcon.Times, id: "##dm-close-input", width: (int)buttonSize))
-                {
-                    DMManager.Instance.CloseDMTab(dmTab.Player);
+                    // Close the DM tab
+                    Plugin.Config.Tabs.Remove(dmTab);
+                    Plugin.SaveConfig();
+                    
+                    // Clean up tracking
+                    DMManager.Instance.ForceCleanupPlayer(dmTab.Player);
                 }
             }
             
             if (ImGui.IsItemHovered())
                 ModernUI.DrawModernTooltip("Close DM Tab", Plugin.Config);
             
-            // Now draw the input field and Send button on the next line
-            var sendButtonWidth = 80f;
-            var inputWidth = ImGui.GetContentRegionAvail().X - sendButtonWidth;
-            
-            ImGui.SetNextItemWidth(inputWidth);
-            
-            var placeholder = $"Message {dmTab.Player.Name}...";
-            var inputFlags = ImGuiInputTextFlags.EnterReturnsTrue;
-            
-            // Track if we should maintain focus
-            var shouldMaintainFocus = false;
-            
-            // Use independent input field for DM section window
-            var inputResult = ImGui.InputTextWithHint("##dm-section-input", placeholder, ref _dmSectionInput, 500, inputFlags);
-            
-            if (inputResult && !string.IsNullOrWhiteSpace(_dmSectionInput))
-            {
-                // Send as tell to the DM target
-                var tellCommand = $"/tell {dmTab.Player.DisplayName} {_dmSectionInput.Trim()}";
-                Plugin.DMMessageRouter.TrackOutgoingTell(dmTab.Player);
-                ChatBox.SendMessage(tellCommand);
-                _dmSectionInput = string.Empty;
-                shouldMaintainFocus = true; // Maintain focus after sending
-            }
-            
             ImGui.SameLine();
             
-            // Send button
-            var sendEnabled = !string.IsNullOrWhiteSpace(_dmSectionInput);
-            using var disabled = ImRaii.Disabled(!sendEnabled);
-            
-            if (ImGui.Button("Send", new Vector2(sendButtonWidth, ImGui.GetFrameHeight())) && sendEnabled)
+            // Pop Out button (same style as main chat hide button) - match input height
+            using (ModernUI.PushModernButtonStyle(Plugin.Config))
+            using (ImRaii.PushStyle(ImGuiStyleVar.FramePadding, new Vector2(ImGui.GetStyle().FramePadding.X, ImGui.GetStyle().FramePadding.Y * 1.2f)))
             {
-                var tellCommand = $"/tell {dmTab.Player.DisplayName} {_dmSectionInput.Trim()}";
-                Plugin.DMMessageRouter.TrackOutgoingTell(dmTab.Player);
-                ChatBox.SendMessage(tellCommand);
-                _dmSectionInput = string.Empty;
-                shouldMaintainFocus = true; // Maintain focus after sending
+                if (ImGuiUtil.IconButton(FontAwesomeIcon.ExternalLinkAlt))
+                {
+                    // Pop out to DM window
+                    DMManager.Instance.ConvertTabToWindow(dmTab.Player);
+                }
             }
             
-            // Maintain focus on the input field after sending a message
-            if (shouldMaintainFocus)
-            {
-                ImGui.SetKeyboardFocusHere(-2); // Focus the input field (2 items back: send button, input field)
-            }
+            if (ImGui.IsItemHovered())
+                ModernUI.DrawModernTooltip("Pop Out DM", Plugin.Config);
+            
         }
     }
 
-    /// <summary>
-    /// Draws the channel name for DM tabs, always showing "Tell PlayerName" format.
-    /// </summary>
-    private void DrawDMChannelName(DMTab dmTab)
-    {
-        // Always show "Tell PlayerName" for DM tabs, regardless of what CurrentChannel.Name contains
-        var chunks = new List<Chunk>
-        {
-            new TextChunk(ChunkSource.None, null, "Tell "),
-            new TextChunk(ChunkSource.None, null, dmTab.Player.DisplayName)
-        };
-        
-        ChatLogWindow.DrawChunks(chunks);
-    }
+    // REMOVED: This method was redundant and not used
+
+    // REMOVED: This method was redundant - using DrawDMChannelNameWithButtons instead
 
     /// <summary>
-    /// Draws the channel name for DM tabs with action buttons on the same line.
+    /// Draws the channel name for DM tabs, always showing "Tell PlayerName" format.
     /// </summary>
     private void DrawDMChannelNameWithButtons(DMTab dmTab)
     {
@@ -542,80 +418,8 @@ public sealed class DMSectionWindow : Window
             new TextChunk(ChunkSource.None, null, dmTab.Player.DisplayName)
         };
         
-        // Draw the channel name
+        // Draw the channel name (buttons are now on the input line)
         ChatLogWindow.DrawChunks(chunks);
-        
-        // Add buttons on the same line, aligned with the Send button's width
-        ImGui.SameLine();
-        
-        // Calculate the actual Send button width to match it exactly
-        var sendButtonTextSize = ImGui.CalcTextSize("Send");
-        var sendButtonWidth = sendButtonTextSize.X + (ImGui.GetStyle().FramePadding.X * 2);
-        var availableWidth = ImGui.GetContentRegionAvail().X;
-        var spacing = 4f; // Spacing between buttons
-        
-        // Calculate button sizes to fit exactly within the Send button width
-        var totalButtonWidth = sendButtonWidth;
-        var individualButtonWidth = (totalButtonWidth - spacing) / 2f; // Two buttons with spacing between
-        var buttonHeight = ImGui.GetFrameHeight() * 0.7f; // Smaller height
-        var customButtonSize = new Vector2(individualButtonWidth, buttonHeight);
-        
-        // Position buttons to align with the Send button's right edge
-        var buttonStartX = availableWidth - sendButtonWidth;
-        if (buttonStartX > 0)
-        {
-            ImGui.SetCursorPosX(ImGui.GetCursorPosX() + buttonStartX);
-            
-            // Close button using regular button with custom size and manually centered text
-            var closeButtonText = "x";
-            var closeTextSize = ImGui.CalcTextSize(closeButtonText);
-            var closeButtonPos = ImGui.GetCursorScreenPos();
-            
-            using (ModernUI.PushModernButtonStyle(Plugin.Config))
-            {
-                if (ImGui.Button("##close-btn", customButtonSize))
-                {
-                    DMManager.Instance.CloseDMTab(dmTab.Player);
-                }
-            }
-            
-            // Draw the text manually centered on the button
-            var closeTextPos = new Vector2(
-                closeButtonPos.X + (customButtonSize.X - closeTextSize.X) * 0.5f,
-                closeButtonPos.Y + (customButtonSize.Y - closeTextSize.Y) * 0.5f
-            );
-            ImGui.GetWindowDrawList().AddText(closeTextPos, ImGui.GetColorU32(ImGuiCol.Text), closeButtonText);
-            
-            if (ImGui.IsItemHovered())
-                ModernUI.DrawModernTooltip("Close DM Tab", Plugin.Config);
-            
-            ImGui.SameLine();
-            ImGui.Dummy(new Vector2(spacing, 0)); // Add spacing between buttons
-            ImGui.SameLine();
-            
-            // Pop out button using regular button with custom size and manually centered text
-            var buttonText = ">";
-            var textSize = ImGui.CalcTextSize(buttonText);
-            var buttonPos = ImGui.GetCursorScreenPos();
-            
-            using (ModernUI.PushModernButtonStyle(Plugin.Config))
-            {
-                if (ImGui.Button("##popout-btn", customButtonSize))
-                {
-                    DMManager.Instance.ConvertTabToWindow(dmTab.Player);
-                }
-            }
-            
-            // Draw the text manually centered on the button
-            var textPos = new Vector2(
-                buttonPos.X + (customButtonSize.X - textSize.X) * 0.5f,
-                buttonPos.Y + (customButtonSize.Y - textSize.Y) * 0.5f
-            );
-            ImGui.GetWindowDrawList().AddText(textPos, ImGui.GetColorU32(ImGuiCol.Text), buttonText);
-            
-            if (ImGui.IsItemHovered())
-                ModernUI.DrawModernTooltip("Pop Out to DM Window", Plugin.Config);
-        }
     }
 
     private void DrawDMTabContextMenu(DMTab dmTab, int tabIndex)

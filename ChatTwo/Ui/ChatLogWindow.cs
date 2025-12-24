@@ -838,7 +838,7 @@ public sealed class ChatLogWindow : Window
 
         using (ModernUI.PushModernButtonStyle(Plugin.Config))
         {
-            if (ImGuiUtil.IconButton(FontAwesomeIcon.Cog, width: (int)buttonWidth))
+            if (ImGuiUtil.IconButton(FontAwesomeIcon.Cog, width: (int)(buttonWidth * 1.1f)))
                 Plugin.SettingsWindow.Toggle();
         }
 
@@ -847,7 +847,7 @@ public sealed class ChatLogWindow : Window
             ImGui.SameLine();
             using (ModernUI.PushModernButtonStyle(Plugin.Config))
             {
-                if (ImGuiUtil.IconButton(FontAwesomeIcon.EyeSlash, width: (int)buttonWidth))
+                if (ImGuiUtil.IconButton(FontAwesomeIcon.EyeSlash, width: (int)(buttonWidth * 1.1f)))
                     UserHide();
             }
         }
