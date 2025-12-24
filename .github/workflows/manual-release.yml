@@ -39,21 +39,43 @@ jobs:
       
     - name: Extract Plugin Files
       run: |
-        # Find the latest.zip file created by DalamudPackager
-        $latestZip = Get-ChildItem -Path "ChatTwo\bin\x64\Release" -Name "latest.zip" -Recurse | Select-Object -First 1
-        if ($latestZip) {
-          $zipPath = "ChatTwo\bin\x64\Release\$latestZip"
-          Write-Host "Found latest.zip at: $zipPath"
-          Expand-Archive -Force $zipPath ./Artifact
-        } else {
-          Write-Host "No latest.zip found, creating manually..."
-          New-Item -ItemType Directory -Force -Path Artifact
-          Copy-Item "ChatTwo\bin\x64\Release\ChatTwo.dll" Artifact\
-          Copy-Item "ChatTwo\bin\x64\Release\ChatTwo.json" Artifact\
-          if (Test-Path "ChatTwo\bin\x64\Release\ChatTwo.pdb") {
-            Copy-Item "ChatTwo\bin\x64\Release\ChatTwo.pdb" Artifact\
+        # List all directories to understand the build output structure
+        Write-Host "=== Build Output Structure ==="
+        Get-ChildItem -Recurse -Directory | Where-Object { $_.Name -eq "Release" } | ForEach-Object { Write-Host $_.FullName }
+        
+        # Look for built files in common locations
+        $possiblePaths = @(
+          "ChatTwo\bin\Release",
+          "ChatTwo\bin\x64\Release", 
+          "ChatTwo\bin\Release\net8.0-windows",
+          "bin\Release",
+          "bin\x64\Release"
+        )
+        
+        $foundPath = $null
+        foreach ($path in $possiblePaths) {
+          if (Test-Path "$path\ChatTwo.dll") {
+            $foundPath = $path
+            Write-Host "Found ChatTwo.dll at: $foundPath"
+            break
           }
         }
+        
+        if (-not $foundPath) {
+          Write-Host "Searching for ChatTwo.dll in all locations..."
+          Get-ChildItem -Recurse -Name "ChatTwo.dll" | ForEach-Object { Write-Host "Found: $_" }
+          throw "Could not find ChatTwo.dll in any expected location"
+        }
+        
+        # Create artifact directory and copy files
+        New-Item -ItemType Directory -Force -Path Artifact
+        Copy-Item "$foundPath\ChatTwo.dll" Artifact\
+        Copy-Item "$foundPath\ChatTwo.json" Artifact\
+        if (Test-Path "$foundPath\ChatTwo.pdb") {
+          Copy-Item "$foundPath\ChatTwo.pdb" Artifact\
+        }
+        
+        Write-Host "=== Artifact Contents ==="
         Get-ChildItem Artifact
         
     - name: Create Release Zip
