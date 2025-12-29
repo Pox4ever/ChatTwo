@@ -312,12 +312,58 @@ public static class ModernUI
         ImGui.TextUnformatted(text);
     }
     
-    internal static FontAwesomeIcon GetTabIcon(Tab tab)
+    internal static FontAwesomeIcon GetCurrentChannelIcon(Tab tab, Configuration config)
     {
+        if (tab is DMTab)
+        {
+            return config.CustomTabIcons.GetValueOrDefault("DM", FontAwesomeIcon.Envelope);
+        }
+        
+        // Get the current channel (temp channel takes priority)
+        var currentChannel = tab.CurrentChannel.UseTempChannel 
+            ? tab.CurrentChannel.TempChannel 
+            : tab.CurrentChannel.Channel;
+            
+        var chatType = currentChannel.ToChatType();
+        
+        // Map chat type to icon key and get custom icon
+        var iconKey = chatType switch
+        {
+            ChatType.Say => "Say",
+            ChatType.Shout => "Shout",
+            ChatType.Yell => "Yell",
+            ChatType.TellIncoming or ChatType.TellOutgoing => "Tell",
+            ChatType.Party => "Party",
+            ChatType.Alliance => "Alliance",
+            ChatType.FreeCompany => "FreeCompany",
+            ChatType.Linkshell1 or ChatType.Linkshell2 or ChatType.Linkshell3 or ChatType.Linkshell4 or 
+            ChatType.Linkshell5 or ChatType.Linkshell6 or ChatType.Linkshell7 or ChatType.Linkshell8 => "Linkshell",
+            ChatType.CrossLinkshell1 or ChatType.CrossLinkshell2 or ChatType.CrossLinkshell3 or ChatType.CrossLinkshell4 or
+            ChatType.CrossLinkshell5 or ChatType.CrossLinkshell6 or ChatType.CrossLinkshell7 or ChatType.CrossLinkshell8 => "CrossLinkshell",
+            ChatType.NoviceNetwork => "NoviceNetwork",
+            ChatType.Echo => "Echo",
+            ChatType.System => "System",
+            ChatType.Debug => "Debug",
+            ChatType.Urgent => "Urgent",
+            ChatType.Notice => "Notice",
+            _ => "Default"
+        };
+        
+        return config.CustomTabIcons.GetValueOrDefault(iconKey, config.CustomTabIcons.GetValueOrDefault("Default", FontAwesomeIcon.CommentDots));
+    }
+
+    internal static FontAwesomeIcon GetTabIcon(Tab tab, Configuration config)
+    {
+        // Check if this tab has a custom icon set
+        if (tab.CustomIcon.HasValue)
+        {
+            return tab.CustomIcon.Value;
+        }
+        
         // Check if this is a DM tab first
         if (tab is DMTab dmTab)
         {
-            return dmTab.GetDMTabIcon();
+            return config.CustomTabIcons.GetValueOrDefault("DM", FontAwesomeIcon.Envelope);
         }
         
         // Determine the primary chat type for this tab
@@ -333,26 +379,143 @@ public static class ModernUI
             primaryType = tab.Channel.Value.ToChatType();
         }
         
-        return primaryType switch
+        // Map chat type to icon key and get custom icon
+        var iconKey = primaryType switch
         {
-            ChatType.Say => FontAwesomeIcon.Comment,
-            ChatType.Shout => FontAwesomeIcon.Bullhorn,
-            ChatType.Yell => FontAwesomeIcon.ExclamationTriangle,
-            ChatType.TellIncoming or ChatType.TellOutgoing => FontAwesomeIcon.Envelope,
-            ChatType.Party => FontAwesomeIcon.Users,
-            ChatType.Alliance => FontAwesomeIcon.Shield,
-            ChatType.FreeCompany => FontAwesomeIcon.Home,
+            ChatType.Say => "Say",
+            ChatType.Shout => "Shout",
+            ChatType.Yell => "Yell",
+            ChatType.TellIncoming or ChatType.TellOutgoing => "Tell",
+            ChatType.Party => "Party",
+            ChatType.Alliance => "Alliance",
+            ChatType.FreeCompany => "FreeCompany",
             ChatType.Linkshell1 or ChatType.Linkshell2 or ChatType.Linkshell3 or ChatType.Linkshell4 or 
-            ChatType.Linkshell5 or ChatType.Linkshell6 or ChatType.Linkshell7 or ChatType.Linkshell8 => FontAwesomeIcon.Link,
+            ChatType.Linkshell5 or ChatType.Linkshell6 or ChatType.Linkshell7 or ChatType.Linkshell8 => "Linkshell",
             ChatType.CrossLinkshell1 or ChatType.CrossLinkshell2 or ChatType.CrossLinkshell3 or ChatType.CrossLinkshell4 or
-            ChatType.CrossLinkshell5 or ChatType.CrossLinkshell6 or ChatType.CrossLinkshell7 or ChatType.CrossLinkshell8 => FontAwesomeIcon.Globe,
-            ChatType.NoviceNetwork => FontAwesomeIcon.Leaf,
-            ChatType.Echo => FontAwesomeIcon.Terminal,
-            ChatType.System => FontAwesomeIcon.Cog,
-            ChatType.Debug => FontAwesomeIcon.Bug,
-            ChatType.Urgent => FontAwesomeIcon.ExclamationCircle,
-            ChatType.Notice => FontAwesomeIcon.InfoCircle,
-            _ => FontAwesomeIcon.CommentDots
+            ChatType.CrossLinkshell5 or ChatType.CrossLinkshell6 or ChatType.CrossLinkshell7 or ChatType.CrossLinkshell8 => "CrossLinkshell",
+            ChatType.NoviceNetwork => "NoviceNetwork",
+            ChatType.Echo => "Echo",
+            ChatType.System => "System",
+            ChatType.Debug => "Debug",
+            ChatType.Urgent => "Urgent",
+            ChatType.Notice => "Notice",
+            _ => "Default"
+        };
+        
+        return config.CustomTabIcons.GetValueOrDefault(iconKey, config.CustomTabIcons.GetValueOrDefault("Default", FontAwesomeIcon.CommentDots));
+    }
+
+    internal static string GetTabIconSymbol(Tab tab, Configuration config)
+    {
+        // Check if this tab has a custom icon set
+        if (tab.CustomIcon.HasValue)
+        {
+            // Return the FontAwesome icon string - this will be handled specially in tab rendering
+            return tab.CustomIcon.Value.ToIconString();
+        }
+        
+        // If no custom icon, fall back to chat type-based icons
+        // Check if this is a DM tab first
+        if (tab is DMTab dmTab)
+        {
+            var dmIcon = config.CustomTabIcons.GetValueOrDefault("DM", FontAwesomeIcon.Envelope);
+            return GetUnicodeSymbolForIcon(dmIcon);
+        }
+        
+        // Determine the primary chat type for this tab
+        var primaryType = ChatType.Say; // Default
+        
+        if (tab.ChatCodes.Count > 0)
+        {
+            // Get the first chat type as primary
+            primaryType = tab.ChatCodes.Keys.First();
+        }
+        else if (tab.Channel.HasValue)
+        {
+            primaryType = tab.Channel.Value.ToChatType();
+        }
+        
+        // Map chat type to icon key and get custom icon
+        var iconKey = primaryType switch
+        {
+            ChatType.Say => "Say",
+            ChatType.Shout => "Shout",
+            ChatType.Yell => "Yell",
+            ChatType.TellIncoming or ChatType.TellOutgoing => "Tell",
+            ChatType.Party => "Party",
+            ChatType.Alliance => "Alliance",
+            ChatType.FreeCompany => "FreeCompany",
+            ChatType.Linkshell1 or ChatType.Linkshell2 or ChatType.Linkshell3 or ChatType.Linkshell4 or 
+            ChatType.Linkshell5 or ChatType.Linkshell6 or ChatType.Linkshell7 or ChatType.Linkshell8 => "Linkshell",
+            ChatType.CrossLinkshell1 or ChatType.CrossLinkshell2 or ChatType.CrossLinkshell3 or ChatType.CrossLinkshell4 or
+            ChatType.CrossLinkshell5 or ChatType.CrossLinkshell6 or ChatType.CrossLinkshell7 or ChatType.CrossLinkshell8 => "CrossLinkshell",
+            ChatType.NoviceNetwork => "NoviceNetwork",
+            ChatType.Echo => "Echo",
+            ChatType.System => "System",
+            ChatType.Debug => "Debug",
+            ChatType.Urgent => "Urgent",
+            ChatType.Notice => "Notice",
+            _ => "Default"
+        };
+        
+        var fontAwesomeIcon = config.CustomTabIcons.GetValueOrDefault(iconKey, config.CustomTabIcons.GetValueOrDefault("Default", FontAwesomeIcon.CommentDots));
+        return GetUnicodeSymbolForIcon(fontAwesomeIcon);
+    }
+    
+    private static string GetUnicodeSymbolForIcon(FontAwesomeIcon icon)
+    {
+        return icon switch
+        {
+            FontAwesomeIcon.Comment => "💬",
+            FontAwesomeIcon.CommentDots => "💭",
+            FontAwesomeIcon.Comments => "💬",
+            FontAwesomeIcon.Envelope => "✉",
+            FontAwesomeIcon.EnvelopeOpen => "📧",
+            FontAwesomeIcon.PaperPlane => "📤",
+            FontAwesomeIcon.Users => "👥",
+            FontAwesomeIcon.User => "👤",
+            FontAwesomeIcon.UserFriends => "👥",
+            FontAwesomeIcon.Home => "🏠",
+            FontAwesomeIcon.Shield => "🛡",
+            FontAwesomeIcon.ShieldAlt => "🛡",
+            FontAwesomeIcon.Bullhorn => "📢",
+            FontAwesomeIcon.ExclamationTriangle => "⚠",
+            FontAwesomeIcon.ExclamationCircle => "❗",
+            FontAwesomeIcon.Link => "🔗",
+            FontAwesomeIcon.Globe => "🌐",
+            FontAwesomeIcon.GlobeAmericas => "🌍",
+            FontAwesomeIcon.Leaf => "🍃",
+            FontAwesomeIcon.Seedling => "🌱",
+            FontAwesomeIcon.Tree => "🌳",
+            FontAwesomeIcon.Terminal => "💻",
+            FontAwesomeIcon.Code => "💻",
+            FontAwesomeIcon.Laptop => "💻",
+            FontAwesomeIcon.Cog => "⚙",
+            FontAwesomeIcon.Cogs => "⚙",
+            FontAwesomeIcon.Tools => "🔧",
+            FontAwesomeIcon.Bug => "🐛",
+            FontAwesomeIcon.InfoCircle => "ℹ",
+            FontAwesomeIcon.Info => "ℹ",
+            FontAwesomeIcon.Star => "⭐",
+            FontAwesomeIcon.Heart => "❤",
+            FontAwesomeIcon.Fire => "🔥",
+            FontAwesomeIcon.Bolt => "⚡",
+            FontAwesomeIcon.Magic => "✨",
+            FontAwesomeIcon.Crown => "👑",
+            FontAwesomeIcon.Gamepad => "🎮",
+            FontAwesomeIcon.HandPaper => "✋",
+            FontAwesomeIcon.Hammer => "🔨",
+            FontAwesomeIcon.Music => "🎵",
+            FontAwesomeIcon.Camera => "📷",
+            FontAwesomeIcon.Book => "📖",
+            // Add the snowflake icon that the user selected
+            FontAwesomeIcon.Snowflake => "❄",
+            FontAwesomeIcon.Sun => "☀",
+            FontAwesomeIcon.Moon => "🌙",
+            // Add new fight and market icons
+            FontAwesomeIcon.Bullseye => "🎯",
+            FontAwesomeIcon.Coins => "🪙",
+            _ => "📄" // Default symbol
         };
     }
     
