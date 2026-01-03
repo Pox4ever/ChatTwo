@@ -78,8 +78,8 @@ internal class DMWindow : Window
         // Create a DMTab for this window to handle message filtering and display
         DMTab = new DMTab(player);
 
-        // Configure window properties with better default size
-        Size = new Vector2(350, 400);
+        // Configure window properties with same size as main chat window
+        Size = new Vector2(500, 250);
         SizeCondition = ImGuiCond.FirstUseEver;
 
         // Apply cascading positioning if enabled
@@ -101,6 +101,10 @@ internal class DMWindow : Window
         // Load recent message history into the DMTab
         // Only load if this is a fresh window (not converted from a tab with existing messages)
         LoadMessageHistory();
+        
+        // CRITICAL: Reprocess existing messages to apply colors
+        // This ensures that messages already in the DMTab get proper colors when popped out to a window
+        ReprocessExistingMessagesForColors();
     }
 
     /// <summary>
@@ -170,8 +174,8 @@ internal class DMWindow : Window
             // Load messages from the persistent MessageStore database
             var loadedMessages = new List<Message>();
             
-            // Query the MessageStore for tell messages with a reasonable search limit
-            var searchLimit = Math.Max(1000, historyCount * 10); // Search more messages to find enough relevant ones
+            // Query the MessageStore for tell messages with unlimited search to find all messages regardless of age
+            var searchLimit = Math.Max(50000, historyCount * 100); // Significantly increased search limit to find all messages
             using (var messageEnumerator = ChatLogWindow.Plugin.MessageManager.Store.GetMostRecentMessages(count: searchLimit))
             {
                 foreach (var message in messageEnumerator)
@@ -221,6 +225,55 @@ internal class DMWindow : Window
     }
 
     /// <summary>
+    /// Reprocesses all existing messages in the DMTab to apply DM colors.
+    /// This is needed when a DM tab is popped out to a window, as the existing messages
+    /// might not have colors applied yet.
+    /// </summary>
+    private void ReprocessExistingMessagesForColors()
+    {
+        try
+        {
+            Plugin.Log.Debug($"ReprocessExistingMessagesForColors: Starting for {Player.DisplayName}");
+            
+            // Get all current messages from the DMTab
+            var existingMessages = new List<Message>();
+            try
+            {
+                using var messages = DMTab.Messages.GetReadOnly(5000); // 5 second timeout
+                existingMessages.AddRange(messages);
+                Plugin.Log.Debug($"Found {existingMessages.Count} existing messages to reprocess");
+            }
+            catch (TimeoutException)
+            {
+                Plugin.Log.Warning("Timeout getting existing messages for color reprocessing");
+                return;
+            }
+            
+            if (existingMessages.Count == 0)
+            {
+                Plugin.Log.Debug("No existing messages to reprocess");
+                return;
+            }
+            
+            // Clear the current messages and re-add them with colors applied
+            DMTab.Messages.Clear();
+            
+            foreach (var message in existingMessages)
+            {
+                // Apply colors and format conversion
+                var processedMessage = ConvertOutgoingMessageFormat(message);
+                DMTab.AddMessage(processedMessage, unread: false);
+            }
+            
+            Plugin.Log.Info($"Reprocessed {existingMessages.Count} messages with DM colors for {Player.DisplayName}");
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to reprocess existing messages for colors: {ex.Message}");
+        }
+    }
+
+    /// <summary>
     /// Converts old outgoing messages to use "You:" format for consistency in DM windows.
     /// </summary>
     /// <param name="message">The message to potentially convert</param>
@@ -229,54 +282,144 @@ internal class DMWindow : Window
     {
         try
         {
+            // Apply colors to all messages first (same as DMTab)
+            var coloredMessage = ApplyDMColorsToMessage(message);
+            
             // Only convert outgoing tell messages
-            if (message.Code.Type != ChatType.TellOutgoing)
-                return message;
+            if (coloredMessage.Code.Type != ChatType.TellOutgoing)
+                return coloredMessage;
             
             // Check if this is an outgoing message (from us to the target player)
-            if (!message.IsToPlayer(Player))
-                return message;
+            if (!coloredMessage.IsToPlayer(Player))
+                return coloredMessage;
             
             // Get the original sender text
-            var originalSender = string.Join("", message.Sender.Select(c => c.StringValue()));
+            var originalSender = string.Join("", coloredMessage.Sender.Select(c => c.StringValue()));
             
             // If it already uses "You:" format, no conversion needed
             if (originalSender.StartsWith("You:"))
-                return message;
+                return coloredMessage;
             
             // If it's the full format (>> PlayerName🌐World:), convert to "You:"
             if (originalSender.StartsWith(">> ") && originalSender.Contains(": "))
             {
                 Plugin.Log.Debug($"Converting old outgoing message sender from '{originalSender}' to 'You: '");
                 
-                // Create new sender chunks with "You:" format
-                var newSenderChunks = new List<Chunk>
+                // Create new sender chunks with "You:" format and custom color if enabled
+                var newSenderChunks = new List<Chunk>();
+                if (Plugin.Config.UseDMCustomColors)
                 {
-                    new TextChunk(ChunkSource.Sender, null, "You: ")
-                };
+                    newSenderChunks.Add(new TextChunk(ChunkSource.Sender, null, "You: ")
+                    {
+                        Foreground = Plugin.Config.DMOutgoingColor
+                    });
+                }
+                else
+                {
+                    newSenderChunks.Add(new TextChunk(ChunkSource.Sender, null, "You: "));
+                }
                 
-                // Keep the original content chunks
-                var contentChunks = message.Content.ToList();
+                // Keep the original content chunks (already colored)
+                var contentChunks = coloredMessage.Content.ToList();
                 
                 return new Message(
-                    message.Receiver,
-                    message.ContentId,
-                    message.AccountId,
-                    message.Code,
+                    coloredMessage.Receiver,
+                    coloredMessage.ContentId,
+                    coloredMessage.AccountId,
+                    coloredMessage.Code,
                     newSenderChunks,
                     contentChunks,
-                    message.SenderSource,
-                    message.ContentSource
+                    coloredMessage.SenderSource,
+                    coloredMessage.ContentSource
                 );
             }
             
             // No conversion needed
-            return message;
+            return coloredMessage;
         }
         catch (Exception ex)
         {
             Plugin.Log.Warning($"Failed to convert outgoing message format: {ex.Message}");
             return message; // Return original on error
+        }
+    }
+
+    /// <summary>
+    /// Applies custom DM colors to a message if enabled in configuration.
+    /// </summary>
+    /// <param name="message">The message to apply colors to</param>
+    /// <returns>A new message with colors applied, or the original message if custom colors are disabled</returns>
+    private Message ApplyDMColorsToMessage(Message message)
+    {
+        if (!Plugin.Config.UseDMCustomColors)
+            return message;
+
+        try
+        {
+            // Determine if this is an incoming or outgoing message
+            bool isIncoming = message.Code.Type == ChatType.TellIncoming;
+            bool isError = message.Code.Type == ChatType.Error;
+            
+            // Determine the color to use
+            uint color;
+            if (isError)
+            {
+                color = Plugin.Config.DMErrorColor;
+            }
+            else if (isIncoming)
+            {
+                color = Plugin.Config.DMIncomingColor;
+            }
+            else
+            {
+                color = Plugin.Config.DMOutgoingColor;
+            }
+
+            // Create new sender chunks with custom color
+            var newSenderChunks = message.Sender.Select(chunk =>
+            {
+                if (chunk is TextChunk textChunk)
+                {
+                    return new TextChunk(textChunk.Source, textChunk.Link, textChunk.Content)
+                    {
+                        Foreground = color,
+                        Glow = textChunk.Glow,
+                        Italic = textChunk.Italic
+                    };
+                }
+                return chunk;
+            }).ToList();
+
+            // Create new content chunks with custom color
+            var newContentChunks = message.Content.Select(chunk =>
+            {
+                if (chunk is TextChunk textChunk)
+                {
+                    return new TextChunk(textChunk.Source, textChunk.Link, textChunk.Content)
+                    {
+                        Foreground = color,
+                        Glow = textChunk.Glow,
+                        Italic = textChunk.Italic
+                    };
+                }
+                return chunk;
+            }).ToList();
+
+            return new Message(
+                message.Receiver,
+                message.ContentId,
+                message.AccountId,
+                message.Code,
+                newSenderChunks,
+                newContentChunks,
+                message.SenderSource,
+                message.ContentSource
+            );
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to apply DM colors to message: {ex.Message}");
+            return message; // Return original if coloring fails
         }
     }
 
@@ -371,7 +514,7 @@ internal class DMWindow : Window
         }
 
         // Set window flags (these rarely change, but we need to set them each frame)
-        Flags = ImGuiWindowFlags.None;
+        Flags = ImGuiWindowFlags.NoScrollbar; // Prevent outer window scrolling
         if (!DMTab.CanMove)
             Flags |= ImGuiWindowFlags.NoMove;
         if (!DMTab.CanResize)
@@ -682,175 +825,15 @@ internal class DMWindow : Window
     }
 
     /// <summary>
-    /// Optimized message rendering specifically for DM windows.
-    /// Removes expensive animations and complex processing for better performance.
+    /// Draws the message log using the same method as DM tabs for consistent color handling.
     /// </summary>
     private void DrawOptimizedMessageLog(IReadOnlyList<Message> messages, float childHeight)
     {
-        // Add NoBackground flag to prevent darker background
-        using var child = ImRaii.Child("##dm-messages", new Vector2(-1, childHeight), false, ImGuiWindowFlags.NoBackground);
-        if (!child.Success)
-            return;
-
-        // OPTIMIZATION: Remove animation system for better performance
-        // Simple message rendering without animations
-        using (ImRaii.PushStyle(ImGuiStyleVar.ItemSpacing, Vector2.Zero))
-        {
-            var maxMessages = Math.Min(messages.Count, Plugin.Config.MaxLinesToRender);
-            var startIndex = Math.Max(0, messages.Count - maxMessages);
-            
-            // Track last timestamp to avoid repetition (like regular chat)
-            string? lastTimestamp = null;
-            
-            for (var i = startIndex; i < messages.Count; i++)
-            {
-                var message = messages[i];
-                
-                // Draw timestamp like regular chat (24h format, no repetition, proper spacing)
-                if (DMTab.DisplayTimestamp)
-                {
-                    var localTime = message.Date.ToLocalTime();
-                    var currentTimestamp = localTime.ToString("HH:mm"); // 24h format like regular chat
-                    
-                    // Only show timestamp if it's different from the last one (like regular chat)
-                    if (currentTimestamp != lastTimestamp)
-                    {
-                        using (ImRaii.PushColor(ImGuiCol.Text, 0xFF888888)) // Gray color like regular chat
-                        {
-                            ImGui.TextUnformatted(currentTimestamp);
-                        }
-                        ImGui.SameLine();
-                        
-                        // Add proper spacing after timestamp (like regular chat)
-                        ImGui.Dummy(new Vector2(8, 0)); // More spacing like regular chat
-                        ImGui.SameLine();
-                        
-                        lastTimestamp = currentTimestamp;
-                    }
-                    else
-                    {
-                        // Same timestamp as previous message - add equivalent spacing
-                        ImGui.Dummy(new Vector2(ImGui.CalcTextSize(currentTimestamp).X + 8, 0));
-                        ImGui.SameLine();
-                    }
-                }
-
-                // Draw sender (if present)
-                if (message.Sender.Count > 0)
-                {
-                    DrawOptimizedChunks(message.Sender, message);
-                    ImGui.SameLine();
-                }
-
-                // Draw content
-                if (message.Content.Count > 0)
-                {
-                    DrawOptimizedChunks(message.Content, message);
-                }
-                else
-                {
-                    ImGui.TextUnformatted(" "); // Ensure something is drawn
-                }
-            }
-        }
-
-        // OPTIMIZATION: Remove smooth scrolling animation for better performance
-        // Auto-scroll to bottom for new messages (instant)
-        if (messages.Count != _lastMessageCount)
-        {
-            _lastMessageCount = messages.Count;
-            ImGui.SetScrollHereY(1.0f); // Scroll to bottom instantly
-        }
+        // Use the same DrawMessageLog method as DM tabs to ensure consistent color handling
+        ChatLogWindow.DrawMessageLog(DMTab, ChatLogWindow.PayloadHandler, childHeight, false);
     }
 
-    /// <summary>
-    /// Optimized chunk rendering without animations for better performance.
-    /// </summary>
-    private void DrawOptimizedChunks(IReadOnlyList<Chunk> chunks, Message message)
-    {
-        for (var i = 0; i < chunks.Count; i++)
-        {
-            var chunk = chunks[i];
-            
-            if (i > 0)
-                ImGui.SameLine();
-            
-            // Handle different chunk types with minimal processing
-            switch (chunk)
-            {
-                case TextChunk textChunk:
-                    // Determine color based on message type (simplified)
-                    if (message.Code.Type == ChatType.Error)
-                    {
-                        using (ImRaii.PushColor(ImGuiCol.Text, 0xFF4444FF)) // Red for errors
-                        {
-                            ImGui.TextUnformatted(textChunk.Content);
-                        }
-                    }
-                    else
-                    {
-                        ImGui.TextUnformatted(textChunk.Content);
-                    }
-                    break;
-                    
-                case IconChunk iconChunk:
-                    // Simplified icon handling
-                    if (iconChunk.Icon == BitmapFontIcon.CrossWorld)
-                    {
-                        ImGui.TextUnformatted($"{(char)SeIconChar.CrossWorld}");
-                    }
-                    else
-                    {
-                        ImGui.TextUnformatted($"[{iconChunk.Icon}]");
-                    }
-                    break;
-                    
-                default:
-                    // Fallback for unknown chunk types
-                    ImGui.TextUnformatted(chunk.StringValue());
-                    break;
-            }
-        }
-    }
 
-    private void DrawSimpleChunks(IReadOnlyList<Chunk> chunks)
-    {
-        for (var i = 0; i < chunks.Count; i++)
-        {
-            var chunk = chunks[i];
-            
-            if (i > 0)
-                ImGui.SameLine();
-            
-            // Handle different chunk types
-            switch (chunk)
-            {
-                case TextChunk textChunk:
-                    // Get chunk color - use white for DM windows for better readability
-                    var color = 0xFFFFFFFF; // Always use white in DM context
-                    
-                    using (ImRaii.PushColor(ImGuiCol.Text, ColourUtil.RgbaToAbgr(color)))
-                    {
-                        ImGui.TextUnformatted(textChunk.Content);
-                    }
-                    break;
-                    
-                case IconChunk iconChunk:
-                    // Simple icon rendering - just show the icon ID as text for now
-                    // In a full implementation, you'd render the actual icon
-                    using (ImRaii.PushColor(ImGuiCol.Text, 0xFF888888))
-                    {
-                        ImGui.TextUnformatted($"[{iconChunk.Icon}]");
-                    }
-                    break;
-                    
-                default:
-                    // Fallback for unknown chunk types
-                    ImGui.TextUnformatted(chunk.StringValue());
-                    break;
-            }
-        }
-    }
 
     /// <summary>
     /// Draws the empty state when no messages have been exchanged.

@@ -1,6 +1,7 @@
 using ChatTwo.Code;
 using ChatTwo.Resources;
 using ChatTwo.Util;
+using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Bindings.ImGui;
 
@@ -176,6 +177,99 @@ internal sealed class Display : ISettingsTab
             
             ImGuiUtil.OptionCheckbox(ref Mutable.ShowTabIcons, "Show Tab Icons", "Display icons in tabs based on their primary chat type");
             ImGui.Spacing();
+            
+            if (Mutable.ShowTabIcons)
+            {
+                ImGui.Indent();
+                if (ImGui.CollapsingHeader("Customize Channel Input Icons"))
+                {
+                    ImGui.Text("Customize icons for channel input buttons (click on an icon to change it):");
+                    ImGui.Spacing();
+                    
+                    var iconTypes = new[]
+                    {
+                        ("Say", "Say chat"),
+                        ("Shout", "Shout chat"),
+                        ("Yell", "Yell chat"),
+                        ("Tell", "Tell messages"),
+                        ("Party", "Party chat"),
+                        ("Alliance", "Alliance chat"),
+                        ("FreeCompany", "Free Company chat"),
+                        ("Linkshell", "Linkshell chat"),
+                        ("CrossLinkshell", "Cross-world Linkshell"),
+                        ("NoviceNetwork", "Novice Network"),
+                        ("Echo", "Echo messages"),
+                        ("System", "System messages"),
+                        ("Debug", "Debug messages"),
+                        ("Urgent", "Urgent messages"),
+                        ("Notice", "Notice messages"),
+                        ("DM", "Direct Messages"),
+                        ("Default", "Default/Other")
+                    };
+                    
+                    foreach (var (key, description) in iconTypes)
+                    {
+                        var currentIcon = Mutable.CustomTabIcons.GetValueOrDefault(key, FontAwesomeIcon.CommentDots);
+                        
+                        using (ImRaii.PushFont(UiBuilder.IconFont))
+                        {
+                            if (ImGui.Button($"{currentIcon.ToIconString()}##{key}"))
+                            {
+                                ImGui.OpenPopup($"IconPicker_{key}");
+                            }
+                        }
+                        
+                        ImGui.SameLine();
+                        ImGui.Text($"{description}");
+                        
+                        // Icon picker popup
+                        if (ImGui.BeginPopup($"IconPicker_{key}"))
+                        {
+                            ImGui.Text($"Choose icon for {description}:");
+                            ImGui.Separator();
+                            
+                            var commonIcons = new[]
+                            {
+                                FontAwesomeIcon.Comment, FontAwesomeIcon.CommentDots, FontAwesomeIcon.Comments,
+                                FontAwesomeIcon.Envelope, FontAwesomeIcon.EnvelopeOpen, FontAwesomeIcon.PaperPlane,
+                                FontAwesomeIcon.Users, FontAwesomeIcon.User, FontAwesomeIcon.UserFriends,
+                                FontAwesomeIcon.Home, FontAwesomeIcon.Shield, FontAwesomeIcon.ShieldAlt,
+                                FontAwesomeIcon.Bullhorn, FontAwesomeIcon.ExclamationTriangle, FontAwesomeIcon.ExclamationCircle,
+                                FontAwesomeIcon.Link, FontAwesomeIcon.Globe, FontAwesomeIcon.GlobeAmericas,
+                                FontAwesomeIcon.Leaf, FontAwesomeIcon.Seedling, FontAwesomeIcon.Tree,
+                                FontAwesomeIcon.Terminal, FontAwesomeIcon.Code, FontAwesomeIcon.Laptop,
+                                FontAwesomeIcon.Cog, FontAwesomeIcon.Cogs, FontAwesomeIcon.Tools,
+                                FontAwesomeIcon.Bug, FontAwesomeIcon.InfoCircle, FontAwesomeIcon.Info,
+                                FontAwesomeIcon.Star, FontAwesomeIcon.Heart, FontAwesomeIcon.Fire,
+                                FontAwesomeIcon.Bolt, FontAwesomeIcon.Magic, FontAwesomeIcon.Crown,
+                                FontAwesomeIcon.Bullseye, FontAwesomeIcon.Coins
+                            };
+                            
+                            var iconsPerRow = 8;
+                            for (int i = 0; i < commonIcons.Length; i++)
+                            {
+                                var icon = commonIcons[i];
+                                
+                                using (ImRaii.PushFont(UiBuilder.IconFont))
+                                {
+                                    if (ImGui.Button($"{icon.ToIconString()}##{key}_{i}"))
+                                    {
+                                        Mutable.CustomTabIcons[key] = icon;
+                                        ImGui.CloseCurrentPopup();
+                                    }
+                                }
+                                
+                                if ((i + 1) % iconsPerRow != 0 && i < commonIcons.Length - 1)
+                                    ImGui.SameLine();
+                            }
+                            
+                            ImGui.EndPopup();
+                        }
+                    }
+                }
+                ImGui.Unindent();
+                ImGui.Spacing();
+            }
             
             ImGuiUtil.OptionCheckbox(ref Mutable.EnableTabDragReorder, "Enable Tab Drag & Drop", "Allow reordering tabs by dragging and dropping them");
             ImGui.Spacing();

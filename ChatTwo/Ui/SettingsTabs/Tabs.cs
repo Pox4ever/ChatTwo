@@ -144,6 +144,87 @@ internal sealed class Tabs : ISettingsTab
             }
 
             ImGui.InputText(Language.Options_Tabs_Name, ref tab.Name, 512, ImGuiInputTextFlags.EnterReturnsTrue);
+            
+            // Custom tab icon setting
+            ImGui.Spacing();
+            var currentIcon = tab.CustomIcon ?? FontAwesomeIcon.None;
+            var hasCustomIcon = tab.CustomIcon.HasValue;
+            
+            ImGui.Text("Custom Tab Icon:");
+            ImGui.SameLine();
+            
+            if (hasCustomIcon)
+            {
+                using (ImRaii.PushFont(UiBuilder.IconFont))
+                {
+                    if (ImGui.Button($"{currentIcon.ToIconString()}##custom-icon-{originalIndex}"))
+                    {
+                        ImGui.OpenPopup($"IconPicker_{originalIndex}");
+                    }
+                }
+                
+                ImGui.SameLine();
+                if (ImGui.Button($"Clear##clear-icon-{originalIndex}"))
+                {
+                    tab.CustomIcon = null;
+                }
+            }
+            else
+            {
+                if (ImGui.Button($"Set Icon##set-icon-{originalIndex}"))
+                {
+                    ImGui.OpenPopup($"IconPicker_{originalIndex}");
+                }
+            }
+            
+            // Icon picker popup
+            if (ImGui.BeginPopup($"IconPicker_{originalIndex}"))
+            {
+                ImGui.Text($"Choose icon for {tab.Name}:");
+                ImGui.Separator();
+                
+                var commonIcons = new[]
+                {
+                    FontAwesomeIcon.Comment, FontAwesomeIcon.CommentDots, FontAwesomeIcon.Comments,
+                    FontAwesomeIcon.Envelope, FontAwesomeIcon.EnvelopeOpen, FontAwesomeIcon.PaperPlane,
+                    FontAwesomeIcon.Users, FontAwesomeIcon.User, FontAwesomeIcon.UserFriends,
+                    FontAwesomeIcon.Home, FontAwesomeIcon.Shield, FontAwesomeIcon.ShieldAlt,
+                    FontAwesomeIcon.Bullhorn, FontAwesomeIcon.ExclamationTriangle, FontAwesomeIcon.ExclamationCircle,
+                    FontAwesomeIcon.Link, FontAwesomeIcon.Globe, FontAwesomeIcon.GlobeAmericas,
+                    FontAwesomeIcon.Leaf, FontAwesomeIcon.Seedling, FontAwesomeIcon.Tree,
+                    FontAwesomeIcon.Terminal, FontAwesomeIcon.Code, FontAwesomeIcon.Laptop,
+                    FontAwesomeIcon.Cog, FontAwesomeIcon.Cogs, FontAwesomeIcon.Tools,
+                    FontAwesomeIcon.Bug, FontAwesomeIcon.InfoCircle, FontAwesomeIcon.Info,
+                    FontAwesomeIcon.Star, FontAwesomeIcon.Heart, FontAwesomeIcon.Fire,
+                    FontAwesomeIcon.Bolt, FontAwesomeIcon.Magic, FontAwesomeIcon.Crown,
+                    FontAwesomeIcon.Gamepad, FontAwesomeIcon.HandPaper, FontAwesomeIcon.Hammer,
+                    FontAwesomeIcon.Music, FontAwesomeIcon.Camera, FontAwesomeIcon.Book,
+                    FontAwesomeIcon.Snowflake, FontAwesomeIcon.Sun, FontAwesomeIcon.Moon,
+                    FontAwesomeIcon.Bullseye, FontAwesomeIcon.Coins
+                };
+                
+                var iconsPerRow = 8;
+                for (int iconIdx = 0; iconIdx < commonIcons.Length; iconIdx++)
+                {
+                    var icon = commonIcons[iconIdx];
+                    
+                    using (ImRaii.PushFont(UiBuilder.IconFont))
+                    {
+                        if (ImGui.Button($"{icon.ToIconString()}##icon-{originalIndex}-{iconIdx}"))
+                        {
+                            tab.CustomIcon = icon;
+                            ImGui.CloseCurrentPopup();
+                        }
+                    }
+                    
+                    if ((iconIdx + 1) % iconsPerRow != 0 && iconIdx < commonIcons.Length - 1)
+                        ImGui.SameLine();
+                }
+                
+                ImGui.EndPopup();
+            }
+            
+            ImGui.Spacing();
             ImGui.Checkbox(Language.Options_Tabs_ShowTimestamps, ref tab.DisplayTimestamp);
             ImGui.Checkbox(Language.Options_Tabs_PopOut, ref tab.PopOut);
             if (tab.PopOut)

@@ -3,9 +3,9 @@
     "Author": "Infi, Anna, Pox4eveR",
     "Name": "Glande Chat2",
     "Punchline": "Glande Chat2 - Enhanced chat with advanced Direct Message system and 7TV emotes",
-    "Description": "Glande Chat2 is a complete rewrite of the in-game chat window as a plugin with advanced Direct Message functionality. Features unlimited tabs, enhanced emotes (BetterTTV + 7TV), customizable sizing, dedicated DM tabs and windows, pop-out DM windows with native collapse/expand, smart message routing, cross-world player support, performance-optimized DM windows (7-13 FPS improvement), intelligent focus management, custom DM color schemes, auto-open DM on new tells, and friend integration with party invite and adventurer plate access.",
+    "Description": "Glande Chat2 is a complete rewrite of the in-game chat window as a plugin with advanced Direct Message functionality.\n\n• Unlimited tabs with flexible filtering\n• Enhanced emotes (BetterTTV + 7TV) with customizable sizing\n• RGB channel coloring and variable font sizes\n• Screenshot mode and unread counts\n• Sidebar tabs and web interface for remote chat access\n\n**Advanced Direct Message Features (Pox):**\n• Dedicated DM tabs and windows for tell conversations (Pox)\n• Pop-out DM windows with native collapse/expand functionality (Pox)\n• Smart message routing with cross-world player support (Pox)\n• Persistent DM history that survives plugin reloads (Pox)\n• Intelligent focus management for main chat vs DM interfaces (Pox)\n• Custom DM color schemes and transparency settings (Pox)\n• Auto-open DM on new tells with configurable modes (Pox)\n• Friend integration with party invite and adventurer plate access (Pox)",
     "Changelog": "**Glande Chat2 - Advanced Direct Message System by Pox4eveR**\n\n**🚀 Revolutionary DM Features:**\n- **DM Windows & Tabs**: Dedicated interfaces for tell conversations with seamless switching\n- **Pop-out DM Windows**: Native collapse/expand with action buttons (invite, friend, adventurer plate)\n- **Smart Message Routing**: Intelligent tell routing with cross-world player support\n- **Performance Optimized**: 7-13 FPS improvement in DM windows through advanced optimizations\n- **Message History**: Persistent DM history that survives plugin reloads\n- **Focus Management**: Smart focus behavior - main chat returns to game, DMs respect user preference\n- **World Detection**: Accurate world information extraction from PlayerPayload data\n- **Auto-open DMs**: Configurable auto-opening of DM interfaces on new tells\n\n**🎨 Enhanced UI Features:**\n- **DM Section Window**: Integrated tell interface with collapse/expand functionality\n- **Custom Colors**: Separate color schemes for incoming/outgoing DMs and errors\n- **Transparency Support**: Focus-based transparency with performance optimizations\n- **Action Integration**: Direct party invites, friend requests, and adventurer plate access",
-    "InternalName": "ChatTwo",
+    "InternalName": "GlandeChatTwo",
     "AssemblyVersion": "1.32.0.0",
     "RepoUrl": "https://github.com/pox4ever/ChatTwo",
     "ApplicableVersion": "any",
@@ -26,6 +26,6 @@
     "DownloadLinkTesting": "https://github.com/pox4ever/ChatTwo/releases/latest/download/latest.zip",
     "DownloadLinkUpdate": "https://github.com/pox4ever/ChatTwo/releases/latest/download/latest.zip",
     "DownloadCount": 0,
-    "LastUpdate": "0"
+    "LastUpdate": "1766536864"
   }
 ]

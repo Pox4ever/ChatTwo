@@ -619,7 +619,7 @@ public sealed class Plugin : IDalamudPlugin
             Plugin.Log.Info("Forcing DM Section Window to be visible and resetting position...");
             DMSectionWindow.IsOpen = true;
             DMSectionWindow.Position = new Vector2(100, 100);
-            DMSectionWindow.Size = new Vector2(400, 300);
+            DMSectionWindow.Size = new Vector2(500, 250);
             
             // Ensure it's in WindowSystem
             if (WindowSystem != null && !WindowSystem.Windows.Contains(DMSectionWindow))

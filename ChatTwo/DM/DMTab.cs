@@ -281,8 +281,8 @@ internal class DMTab : Tab
             // Load messages from the persistent MessageStore database
             var loadedMessages = new List<Message>();
             
-            // Query the MessageStore for tell messages with a reasonable search limit
-            var searchLimit = Math.Max(2000, historyCount * 20); // Increased search limit to find more messages
+            // Query the MessageStore for tell messages with unlimited search to find all messages regardless of age
+            var searchLimit = Math.Max(100000, historyCount * 200); // Significantly increased search limit to find all messages
             Plugin.Log.Debug($"Searching through {searchLimit} recent messages for {Player.DisplayName}");
             
             var totalTellsFound = 0;
@@ -377,7 +377,7 @@ internal class DMTab : Tab
                 // Debug: Let's see what messages we can find for debugging
                 Plugin.Log.Debug($"Debug: Searching for any messages containing '{Player.Name}' in sender or content...");
                 var debugCount = 0;
-                using (var debugEnumerator = dmManager.PluginInstance.MessageManager.Store.GetMostRecentMessages(count: 500))
+                using (var debugEnumerator = dmManager.PluginInstance.MessageManager.Store.GetMostRecentMessages(count: 50000))
                 {
                     foreach (var message in debugEnumerator)
                     {

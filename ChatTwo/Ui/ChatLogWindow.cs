@@ -670,7 +670,8 @@ public sealed class ChatLogWindow : Window
         {
             using (ModernUI.PushModernButtonStyle(Plugin.Config))
             {
-                if (ImGuiUtil.IconButton(FontAwesomeIcon.Comment) && activeTab.Channel is null)
+                var channelIcon = ModernUI.GetCurrentChannelIcon(activeTab, Plugin.Config);
+                if (ImGuiUtil.IconButton(channelIcon) && activeTab.Channel is null)
                     ImGui.OpenPopup(ChatChannelPicker);
             }
 
@@ -838,7 +839,7 @@ public sealed class ChatLogWindow : Window
 
         using (ModernUI.PushModernButtonStyle(Plugin.Config))
         {
-            if (ImGuiUtil.IconButton(FontAwesomeIcon.Cog, width: (int)buttonWidth))
+            if (ImGuiUtil.IconButton(FontAwesomeIcon.Cog, width: (int)(buttonWidth * 1.1f)))
                 Plugin.SettingsWindow.Toggle();
         }
 
@@ -847,7 +848,7 @@ public sealed class ChatLogWindow : Window
             ImGui.SameLine();
             using (ModernUI.PushModernButtonStyle(Plugin.Config))
             {
-                if (ImGuiUtil.IconButton(FontAwesomeIcon.EyeSlash, width: (int)buttonWidth))
+                if (ImGuiUtil.IconButton(FontAwesomeIcon.EyeSlash, width: (int)(buttonWidth * 1.1f)))
                     UserHide();
             }
         }
@@ -872,7 +873,8 @@ public sealed class ChatLogWindow : Window
         var beforeIcon = ImGui.GetCursorPos();
         using (ModernUI.PushModernButtonStyle(Plugin.Config))
         {
-            if (ImGuiUtil.IconButton(FontAwesomeIcon.Comment) && activeTab.Channel is null)
+            var channelIcon = ModernUI.GetCurrentChannelIcon(activeTab, Plugin.Config);
+            if (ImGuiUtil.IconButton(channelIcon) && activeTab.Channel is null)
                 ImGui.OpenPopup(ChatChannelPicker);
         }
 
@@ -1877,10 +1879,24 @@ public sealed class ChatLogWindow : Window
 
                 // Create tab label with optional icon
                 var tabLabel = tabName + unread;
-                if (Plugin.Config.ModernUIEnabled && Plugin.Config.ShowTabIcons)
+                var hasCustomIcon = false;
+                var iconString = "";
+                
+                if (Plugin.Config.ShowTabIcons)
                 {
-                    var icon = ModernUI.GetTabIcon(tab);
-                    tabLabel = $"{icon.ToIconString()} {tabName}{unread}";
+                    var iconSymbol = ModernUI.GetTabIconSymbol(tab, Plugin.Config);
+                    if (tab.CustomIcon.HasValue)
+                    {
+                        // For custom icons, we'll render them separately with FontAwesome font
+                        hasCustomIcon = true;
+                        iconString = iconSymbol;
+                        tabLabel = $"        {tabName}{unread}"; // Add more space for icon (4 spaces)
+                    }
+                    else
+                    {
+                        // For non-custom icons, use the symbol directly
+                        tabLabel = $"{iconSymbol} {tabName}{unread}";
+                    }
                 }
 
                 // For DM tabs, add inline action buttons
@@ -1899,7 +1915,42 @@ public sealed class ChatLogWindow : Window
                     DrawTabContextMenu(tab, tabI);
 
                     if (!tabItem.Success)
+                    {
+                        // Draw custom icon even for inactive tabs
+                        if (hasCustomIcon)
+                        {
+                            var tabMin = ImGui.GetItemRectMin();
+                            var tabMax = ImGui.GetItemRectMax();
+                            var drawList = ImGui.GetWindowDrawList();
+                            
+                            // Calculate icon position (left side of tab)
+                            var iconPos = new Vector2(tabMin.X + 9, tabMin.Y + (tabMax.Y - tabMin.Y - ImGui.GetTextLineHeight()) * 0.5f);
+                            
+                            // Draw the FontAwesome icon
+                            using (ImRaii.PushFont(UiBuilder.IconFont))
+                            {
+                                drawList.AddText(iconPos, ImGui.GetColorU32(ImGuiCol.Text), iconString);
+                            }
+                        }
                         continue;
+                    }
+
+                    // Draw custom icon for active tab
+                    if (hasCustomIcon)
+                    {
+                        var tabMin = ImGui.GetItemRectMin();
+                        var tabMax = ImGui.GetItemRectMax();
+                        var drawList = ImGui.GetWindowDrawList();
+                        
+                        // Calculate icon position (left side of tab)
+                        var iconPos = new Vector2(tabMin.X + 9, tabMin.Y + (tabMax.Y - tabMin.Y - ImGui.GetTextLineHeight()) * 0.5f);
+                        
+                        // Draw the FontAwesome icon
+                        using (ImRaii.PushFont(UiBuilder.IconFont))
+                        {
+                            drawList.AddText(iconPos, ImGui.GetColorU32(ImGuiCol.Text), iconString);
+                        }
+                    }
 
                     var hasTabSwitched = Plugin.LastTab != tabI;
                     Plugin.LastTab = tabI;
@@ -1929,7 +1980,42 @@ public sealed class ChatLogWindow : Window
                     DrawTabContextMenu(tab, tabI);
 
                     if (!tabItem.Success)
+                    {
+                        // Draw custom icon even for inactive tabs
+                        if (hasCustomIcon)
+                        {
+                            var tabMin = ImGui.GetItemRectMin();
+                            var tabMax = ImGui.GetItemRectMax();
+                            var drawList = ImGui.GetWindowDrawList();
+                            
+                            // Calculate icon position (left side of tab)
+                            var iconPos = new Vector2(tabMin.X + 9, tabMin.Y + (tabMax.Y - tabMin.Y - ImGui.GetTextLineHeight()) * 0.5f);
+                            
+                            // Draw the FontAwesome icon
+                            using (ImRaii.PushFont(UiBuilder.IconFont))
+                            {
+                                drawList.AddText(iconPos, ImGui.GetColorU32(ImGuiCol.Text), iconString);
+                            }
+                        }
                         continue;
+                    }
+
+                    // Draw custom icon for active tab
+                    if (hasCustomIcon)
+                    {
+                        var tabMin = ImGui.GetItemRectMin();
+                        var tabMax = ImGui.GetItemRectMax();
+                        var drawList = ImGui.GetWindowDrawList();
+                        
+                        // Calculate icon position (left side of tab)
+                        var iconPos = new Vector2(tabMin.X + 9, tabMin.Y + (tabMax.Y - tabMin.Y - ImGui.GetTextLineHeight()) * 0.5f);
+                        
+                        // Draw the FontAwesome icon
+                        using (ImRaii.PushFont(UiBuilder.IconFont))
+                        {
+                            drawList.AddText(iconPos, ImGui.GetColorU32(ImGuiCol.Text), iconString);
+                        }
+                    }
 
                     var hasTabSwitched = Plugin.LastTab != tabI;
                     Plugin.LastTab = tabI;
@@ -1991,10 +2077,24 @@ public sealed class ChatLogWindow : Window
                     
                     // Create tab label with optional icon for sidebar
                     var tabLabel = tabName + unread;
-                    if (Plugin.Config.ModernUIEnabled && Plugin.Config.ShowTabIcons)
+                    var hasCustomIcon = false;
+                    var iconString = "";
+                    
+                    if (Plugin.Config.ShowTabIcons)
                     {
-                        var icon = ModernUI.GetTabIcon(tab);
-                        tabLabel = $"{icon.ToIconString()} {tabName}{unread}";
+                        var iconSymbol = ModernUI.GetTabIconSymbol(tab, Plugin.Config);
+                        if (tab.CustomIcon.HasValue)
+                        {
+                            // For custom icons, we'll render them separately with FontAwesome font
+                            hasCustomIcon = true;
+                            iconString = iconSymbol;
+                            tabLabel = $"      {tabName}{unread}"; // Add more space for icon (4 spaces)
+                        }
+                        else
+                        {
+                            // For non-custom icons, use the symbol directly
+                            tabLabel = $"{iconSymbol} {tabName}{unread}";
+                        }
                     }
                     
                     // For DM tabs, handle selection and buttons differently
@@ -2056,6 +2156,23 @@ public sealed class ChatLogWindow : Window
                     {
                         // Regular tab handling for sidebar
                         var clicked = ImGui.Selectable($"{tabLabel}###log-tab-{tabI}", Plugin.LastTab == tabI || Plugin.WantedTab == tabI);
+                        
+                        // Draw custom icon if present
+                        if (hasCustomIcon && ImGui.IsItemVisible())
+                        {
+                            var itemMin = ImGui.GetItemRectMin();
+                            var itemMax = ImGui.GetItemRectMax();
+                            var drawList = ImGui.GetWindowDrawList();
+                            
+                            // Calculate icon position (left side of selectable)
+                            var iconPos = new Vector2(itemMin.X + 4, itemMin.Y + (itemMax.Y - itemMin.Y - ImGui.GetTextLineHeight()) * 0.5f);
+                            
+                            // Draw the FontAwesome icon
+                            using (ImRaii.PushFont(UiBuilder.IconFont))
+                            {
+                                drawList.AddText(iconPos, ImGui.GetColorU32(ImGuiCol.Text), iconString);
+                            }
+                        }
                         
                         // Handle drag and drop reordering for sidebar
                         if (ModernUI.HandleTabDragDrop(tabI, Plugin.Config.Tabs, Plugin.Config))
@@ -2745,3 +2862,7 @@ public sealed class ChatLogWindow : Window
         return $"Player {hashCode:X8}";
     }
 }
+
+
+
+

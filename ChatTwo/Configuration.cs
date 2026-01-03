@@ -8,6 +8,7 @@ using ChatTwo.Util;
 using Dalamud;
 using Dalamud.Configuration;
 using Dalamud.Game.ClientState.Keys;
+using Dalamud.Interface;
 using Dalamud.Interface.FontIdentifier;
 using Dalamud.Bindings.ImGui;
 
@@ -143,6 +144,28 @@ internal class Configuration : IPluginConfiguration
     public bool ShowTabIcons = true;
     public bool EnableTabDragReorder = true;
     public bool SmoothTabTransitions = true;
+    
+    // Customizable Tab Icons
+    public Dictionary<string, FontAwesomeIcon> CustomTabIcons = new()
+    {
+        { "Say", FontAwesomeIcon.Comment },
+        { "Shout", FontAwesomeIcon.Bullhorn },
+        { "Yell", FontAwesomeIcon.ExclamationTriangle },
+        { "Tell", FontAwesomeIcon.Envelope },
+        { "Party", FontAwesomeIcon.Users },
+        { "Alliance", FontAwesomeIcon.Shield },
+        { "FreeCompany", FontAwesomeIcon.Home },
+        { "Linkshell", FontAwesomeIcon.Link },
+        { "CrossLinkshell", FontAwesomeIcon.Globe },
+        { "NoviceNetwork", FontAwesomeIcon.Leaf },
+        { "Echo", FontAwesomeIcon.Terminal },
+        { "System", FontAwesomeIcon.Cog },
+        { "Debug", FontAwesomeIcon.Bug },
+        { "Urgent", FontAwesomeIcon.ExclamationCircle },
+        { "Notice", FontAwesomeIcon.InfoCircle },
+        { "DM", FontAwesomeIcon.Envelope },
+        { "Default", FontAwesomeIcon.CommentDots }
+    };
     
     // Enhanced Emote Integration Settings
     public bool ShowInlineEmotePreviews = true;
@@ -332,6 +355,7 @@ internal class Configuration : IPluginConfiguration
         ShowTabIcons = other.ShowTabIcons;
         EnableTabDragReorder = other.EnableTabDragReorder;
         SmoothTabTransitions = other.SmoothTabTransitions;
+        CustomTabIcons = new Dictionary<string, FontAwesomeIcon>(other.CustomTabIcons);
         
         // Enhanced Emote Integration Settings
         ShowInlineEmotePreviews = other.ShowInlineEmotePreviews;
@@ -416,6 +440,9 @@ public class Tab
     public Dictionary<ChatType, ChatSource> ChatCodes = new();
     public bool ExtraChatAll;
     public HashSet<Guid> ExtraChatChannels = [];
+    
+    // Custom tab icon
+    public FontAwesomeIcon? CustomIcon = null;
 
     public UnreadMode UnreadMode = UnreadMode.Unseen;
     public bool UnhideOnActivity;
@@ -490,6 +517,7 @@ public class Tab
             HideInLoadingScreens = HideInLoadingScreens,
             HideInBattle = HideInBattle,
             HideWhenInactive = HideWhenInactive,
+            CustomIcon = CustomIcon,
         };
     }
 
