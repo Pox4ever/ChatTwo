@@ -121,7 +121,7 @@ public sealed class Plugin : IDalamudPlugin
             
             // Clean up any stale DM references from previous sessions
             // This prevents "Focus Existing DM" issues after plugin reload
-            DMManager.Instance.CleanupStaleReferences();
+            DMManager.Instance.ForceCleanupStaleReferences();
             
             // CRITICAL FIX: Restore existing DM tabs after cleanup
             // This ensures that DM tabs that were open before plugin reload are properly tracked
@@ -346,7 +346,7 @@ public sealed class Plugin : IDalamudPlugin
                     
                 case "stale":
                     Plugin.Log.Info("Debug: Running stale reference cleanup");
-                    DMManager.Instance.CleanupStaleReferences();
+                    DMManager.Instance.ForceCleanupStaleReferences();
                     break;
                     
                 case "debug":

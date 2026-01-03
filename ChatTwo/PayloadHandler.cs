@@ -710,9 +710,9 @@ public sealed class PayloadHandler
             var dmManager = ChatTwo.DM.DMManager.Instance;
             var dmPlayer = new ChatTwo.DM.DMPlayer(player.PlayerName, world.RowId);
             
-            // CRITICAL FIX: Clean up stale references before checking for existing DM interfaces
-            // This prevents showing "Focus Existing DM" when the DM was actually closed
-            dmManager.CleanupStaleReferences();
+            // PERFORMANCE FIX: Removed CleanupStaleReferences() call from context menu
+            // The cleanup is now throttled and will run automatically when needed
+            // The HasOpenDM methods are robust enough to handle stale references
             
             var hasExistingWindow = dmManager.HasOpenDMWindow(dmPlayer);
             var hasExistingTab = dmManager.HasOpenDMTab(dmPlayer);

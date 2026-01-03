@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
+using System.Threading.Tasks;
 using ChatTwo.Code;
 using ChatTwo.GameFunctions;
 using ChatTwo.GameFunctions.Types;
@@ -57,6 +58,19 @@ internal class DMWindow : Window
 
     // OPTIMIZATION: Simplified state tracking (removed expensive animation dictionaries)
     private int _lastMessageCount = 0;
+    
+    // PERFORMANCE: Async initialization to prevent constructor stutter
+    private bool _needsAsyncInitialization = false;
+    private bool _isInitializing = false;
+    private bool _initializationComplete = false;
+    private long _initializationStartTime = 0;
+    private Task? _initializationTask = null;
+    
+    // PERFORMANCE: Render caching to reduce FPS impact
+    private bool _renderCacheValid = false;
+    private int _lastRenderedMessageCount = 0;
+    private long _lastRenderTime = 0;
+    private const long RenderCacheInterval = 33; // ~30 FPS for message rendering (vs 60+ for UI)
 
     public DMWindow(ChatLogWindow chatLogWindow, DMPlayer player) : base($"DM: {player.DisplayName}##dm-window-{player.GetHashCode()}")
     {
@@ -98,30 +112,293 @@ internal class DMWindow : Window
         RespectCloseHotkey = false;
         DisableWindowSounds = true;
 
-        // Load recent message history into the DMTab
-        // Only load if this is a fresh window (not converted from a tab with existing messages)
-        LoadMessageHistory();
+        // PERFORMANCE FIX: Defer expensive operations to avoid constructor stutter
+        // Mark that we need to load content asynchronously
+        _needsAsyncInitialization = true;
+        _initializationStartTime = Environment.TickCount64;
         
-        // CRITICAL: Reprocess existing messages to apply colors
-        // This ensures that messages already in the DMTab get proper colors when popped out to a window
-        ReprocessExistingMessagesForColors();
+        Plugin.Log.Debug($"DMWindow constructor completed for {Player.DisplayName} - deferring expensive operations");
+    }
+
+    /// <summary>
+    /// Starts the asynchronous initialization process to load message history without blocking the UI.
+    /// </summary>
+    private void StartAsyncInitialization()
+    {
+        if (_isInitializing || _initializationComplete)
+            return;
+
+        _isInitializing = true;
+        _needsAsyncInitialization = false;
+
+        Plugin.Log.Debug($"Starting async initialization for DM window: {Player.DisplayName}");
+
+        // Start the initialization task on a background thread
+        _initializationTask = Task.Run(async () =>
+        {
+            try
+            {
+                // Add a small delay to let the window render first
+                await Task.Delay(50);
+
+                // Load message history on background thread
+                await LoadMessageHistoryAsync();
+
+                // Reprocess existing messages for colors
+                await ReprocessExistingMessagesForColorsAsync();
+
+                _initializationComplete = true;
+                _isInitializing = false;
+
+                var elapsed = Environment.TickCount64 - _initializationStartTime;
+                Plugin.Log.Debug($"Async initialization completed for {Player.DisplayName} in {elapsed}ms");
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.Error($"Async initialization failed for {Player.DisplayName}: {ex.Message}");
+                _isInitializing = false;
+                _initializationComplete = true; // Mark as complete even on error to stop loading state
+            }
+        });
+    }
+
+    /// <summary>
+    /// Asynchronous version of LoadMessageHistory that doesn't block the UI thread.
+    /// </summary>
+    private async Task LoadMessageHistoryAsync()
+    {
+        try
+        {
+            Plugin.Log.Debug($"LoadMessageHistoryAsync: Starting history load for {Player.DisplayName}");
+            
+            // Check if message history loading is enabled
+            if (!Plugin.Config.LoadDMMessageHistory)
+            {
+                Plugin.Log.Debug($"Message history loading disabled for {Player.DisplayName}");
+                return;
+            }
+
+            // First check if we already have messages to avoid unnecessary work
+            var currentCount = 0;
+            try
+            {
+                using var existingMessages = DMTab.Messages.GetReadOnly(100); // Short timeout for async
+                currentCount = existingMessages.Count;
+            }
+            catch (TimeoutException)
+            {
+                // Timeout is fine, proceed with load
+            }
+            
+            if (currentCount > 0)
+            {
+                Plugin.Log.Debug($"DMWindow: Skipping history load - already have {currentCount} messages for {Player.DisplayName}");
+                return; // Already have messages, skip history load to avoid duplication
+            }
+
+            // Check if MessageManager is available
+            if (ChatLogWindow?.Plugin?.MessageManager?.Store == null)
+            {
+                Plugin.Log.Warning($"LoadMessageHistoryAsync: MessageManager or Store is null for {Player.DisplayName} - cannot load history");
+                return;
+            }
+
+            var historyCount = Math.Max(1, Math.Min(200, Plugin.Config.DMMessageHistoryCount));
+            Plugin.Log.Debug($"Loading {historyCount} messages from history for {Player.DisplayName}");
+            
+            // Load messages from the persistent MessageStore database
+            var loadedMessages = new List<Message>();
+            
+            // PERFORMANCE: Reduced search limit and add yielding for better responsiveness
+            var searchLimit = Math.Min(10000, historyCount * 50); // Reduced from 50000 to 10000
+            var processedCount = 0;
+            
+            await Task.Run(() =>
+            {
+                using var messageEnumerator = ChatLogWindow.Plugin.MessageManager.Store.GetMostRecentMessages(count: searchLimit);
+                foreach (var message in messageEnumerator)
+                {
+                    // Yield control periodically to prevent blocking
+                    if (++processedCount % 1000 == 0)
+                    {
+                        Task.Yield();
+                    }
+
+                    // Check if this is a tell message related to our target player
+                    if (message.IsTell() && message.IsRelatedToPlayer(Player))
+                    {
+                        loadedMessages.Add(message);
+                        
+                        // Stop after finding enough messages
+                        if (loadedMessages.Count >= historyCount)
+                            break;
+                    }
+                }
+            });
+            
+            // Take the most recent messages as configured
+            var recentMessages = loadedMessages
+                .OrderByDescending(m => m.Date)
+                .Take(historyCount)
+                .OrderBy(m => m.Date)
+                .ToArray();
+            
+            if (recentMessages.Length > 0)
+            {
+                Plugin.Log.Info($"Loaded {recentMessages.Length} message(s) from history for {Player.DisplayName}");
+                
+                // Add messages on the main thread
+                await Task.Run(() =>
+                {
+                    foreach (var message in recentMessages)
+                    {
+                        // Convert old outgoing messages to "You:" format for consistency
+                        var processedMessage = ConvertOutgoingMessageFormat(message);
+                        
+                        DMTab.AddMessage(processedMessage, unread: false);
+                        // Also add to in-memory history for consistency
+                        History.AddMessage(processedMessage, isIncoming: processedMessage.IsFromPlayer(Player));
+                    }
+                });
+            }
+            else
+            {
+                Plugin.Log.Debug($"No message history found for DM with {Player.DisplayName}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to load message history for DM window: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Asynchronous version of ReprocessExistingMessagesForColors that doesn't block the UI thread.
+    /// </summary>
+    private async Task ReprocessExistingMessagesForColorsAsync()
+    {
+        try
+        {
+            Plugin.Log.Debug($"ReprocessExistingMessagesForColorsAsync: Starting for {Player.DisplayName}");
+            
+            // Get all current messages from the DMTab
+            var existingMessages = new List<Message>();
+            try
+            {
+                using var messages = DMTab.Messages.GetReadOnly(1000); // Shorter timeout for async
+                existingMessages.AddRange(messages);
+                Plugin.Log.Debug($"Found {existingMessages.Count} existing messages to reprocess");
+            }
+            catch (TimeoutException)
+            {
+                Plugin.Log.Warning("Timeout getting existing messages for color reprocessing");
+                return;
+            }
+            
+            if (existingMessages.Count == 0)
+            {
+                Plugin.Log.Debug("No existing messages to reprocess");
+                return;
+            }
+            
+            // Process messages on background thread
+            var processedMessages = await Task.Run(() =>
+            {
+                var processed = new List<Message>();
+                var processedCount = 0;
+                
+                foreach (var message in existingMessages)
+                {
+                    // Yield control periodically
+                    if (++processedCount % 100 == 0)
+                    {
+                        Task.Yield();
+                    }
+                    
+                    // Apply colors and format conversion
+                    var processedMessage = ConvertOutgoingMessageFormat(message);
+                    processed.Add(processedMessage);
+                }
+                
+                return processed;
+            });
+            
+            // Update messages on main thread
+            DMTab.Messages.Clear();
+            foreach (var processedMessage in processedMessages)
+            {
+                DMTab.AddMessage(processedMessage, unread: false);
+            }
+            
+            Plugin.Log.Info($"Reprocessed {processedMessages.Count} messages with DM colors for {Player.DisplayName}");
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to reprocess existing messages for colors: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Draws a loading state while async initialization is in progress.
+    /// </summary>
+    private void DrawLoadingState(float availableHeight)
+    {
+        var windowWidth = ImGui.GetContentRegionAvail().X;
+        var centerY = availableHeight / 2;
+
+        // Center the loading message
+        ImGui.SetCursorPosY(ImGui.GetCursorPosY() + centerY - 40);
+
+        var text = $"Loading conversation with {Player.DisplayName}...";
+        var textSize = ImGui.CalcTextSize(text);
+        var centerX = (windowWidth - textSize.X) / 2;
+        
+        ImGui.SetCursorPosX(centerX);
+        
+        using (ImRaii.PushColor(ImGuiCol.Text, ImGui.GetColorU32(ImGuiCol.TextDisabled)))
+        {
+            ImGui.TextUnformatted(text);
+        }
+
+        // Add a simple progress indicator
+        var elapsed = Environment.TickCount64 - _initializationStartTime;
+        var dots = new string('.', (int)((elapsed / 500) % 4)); // Animate dots every 500ms
+        var progressText = $"Please wait{dots}";
+        var progressTextSize = ImGui.CalcTextSize(progressText);
+        var progressCenterX = (windowWidth - progressTextSize.X) / 2;
+        
+        ImGui.SetCursorPosX(progressCenterX);
+        
+        using (ImRaii.PushColor(ImGuiCol.Text, ImGui.GetColorU32(ImGuiCol.TextDisabled)))
+        {
+            ImGui.TextUnformatted(progressText);
+        }
     }
 
     /// <summary>
     /// Updates the window title to include unread indicators if there are unread messages.
+    /// OPTIMIZED: Only update title when unread count actually changes.
     /// </summary>
     private void UpdateWindowTitle()
     {
         var unreadCount = History?.UnreadCount ?? 0;
         var baseTitle = $"DM: {Player.DisplayName}";
         
+        // OPTIMIZATION: Cache the last title to avoid unnecessary string operations
+        string newTitle;
         if (unreadCount > 0)
         {
-            WindowName = $"{baseTitle} •{unreadCount}##dm-window-{Player.GetHashCode()}";
+            newTitle = $"{baseTitle} •{unreadCount}##dm-window-{Player.GetHashCode()}";
         }
         else
         {
-            WindowName = $"{baseTitle}##dm-window-{Player.GetHashCode()}";
+            newTitle = $"{baseTitle}##dm-window-{Player.GetHashCode()}";
+        }
+        
+        // Only update if title actually changed
+        if (WindowName != newTitle)
+        {
+            WindowName = newTitle;
         }
     }
 
@@ -426,19 +703,30 @@ internal class DMWindow : Window
     // Cache for DrawConditions to reduce overhead
     private long _lastConditionsCheck = 0;
     private bool _lastConditionsResult = true;
+    
+    // Cache for position/size to avoid updating every frame
+    private Vector2? _lastPosition = null;
+    private Vector2? _lastSize = null;
+    private long _lastPositionSizeCheck = 0;
 
     public override bool DrawConditions()
     {
         FrameTime = Environment.TickCount64;
         
+        // OPTIMIZATION: Early exit for closed windows
+        if (!IsOpen)
+            return false;
+        
         // Use the same hiding logic as the main chat window for consistency
-        // This includes checks for cutscenes, user hide, battle, and login state
         if (ChatLogWindow.IsHidden)
             return false;
         
-        // Only check window closure state occasionally to reduce overhead
-        if ((FrameTime % 200) == 0) // Check every ~200ms instead of every frame
+        // OPTIMIZATION: Reduce frequency of expensive checks to every 500ms instead of 100-200ms
+        var shouldCheckExpensiveConditions = (FrameTime % 500) == 0;
+        
+        if (shouldCheckExpensiveConditions)
         {
+            // Check window closure state
             if (_wasOpen && !IsOpen)
             {
                 // Window was just closed, notify DMManager
@@ -452,18 +740,9 @@ internal class DMWindow : Window
                     Plugin.Log.Error($"Failed to notify DMManager of window closure: {ex.Message}");
                 }
             }
-            
-            // Update the previous state
             _wasOpen = IsOpen;
-        }
-        
-        // If window is closed, don't draw
-        if (!IsOpen)
-            return false;
-        
-        // Cache expensive condition checks
-        if (FrameTime - _lastConditionsCheck > 100) // Update every ~100ms
-        {
+            
+            // Update cached conditions
             _lastConditionsCheck = FrameTime;
             
             // Check if we should hide based on various conditions
@@ -497,11 +776,35 @@ internal class DMWindow : Window
 
     public override void PreDraw()
     {
-        // Only apply style changes when necessary
+        // PERFORMANCE: Minimize window flags to reduce ImGui overhead
+        // Remove expensive window features that cause FPS drops
+        Flags = ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse;
+        
+        // OPTIMIZATION: Only apply expensive flags when necessary
+        if (!DMTab.CanMove)
+            Flags |= ImGuiWindowFlags.NoMove;
+        if (!DMTab.CanResize)
+            Flags |= ImGuiWindowFlags.NoResize;
+            
+        // PERFORMANCE: Minimal window flags while preserving functionality
+        if (Plugin.Config.UseMinimalDMWindows)
+        {
+            // Reduce overhead but keep essential functionality
+            Flags |= ImGuiWindowFlags.NoNav | 
+                     ImGuiWindowFlags.NoFocusOnAppearing;
+        }
+        
+        // DISABLED: Aggressive mode was breaking functionality
+        // if (Plugin.Config.UseAggressivePerformanceMode)
+        // {
+        //     // This mode broke window headers and made windows transparent
+        // }
+
+        // OPTIMIZATION: Cache style application to avoid repeated work
         if (Plugin.Config is { OverrideStyle: true, ChosenStyle: not null })
             StyleModel.GetConfiguredStyles()?.FirstOrDefault(style => style.Name == Plugin.Config.ChosenStyle)?.Push();
 
-        // OPTIMIZATION: Cache ModernUI state and only apply when needed
+        // OPTIMIZATION: Only apply ModernUI when state changes
         var modernUIEnabled = Plugin.Config.ModernUIEnabled;
         if (modernUIEnabled != _lastModernUIEnabled)
         {
@@ -513,106 +816,184 @@ internal class DMWindow : Window
             ModernUI.BeginModernStyle(Plugin.Config);
         }
 
-        // Set window flags (these rarely change, but we need to set them each frame)
-        Flags = ImGuiWindowFlags.NoScrollbar; // Prevent outer window scrolling
-        if (!DMTab.CanMove)
-            Flags |= ImGuiWindowFlags.NoMove;
-        if (!DMTab.CanResize)
-            Flags |= ImGuiWindowFlags.NoResize;
-
-        // OPTIMIZATION: Simplified alpha calculation
-        var alpha = DMTab.IndependentOpacity ? DMTab.Opacity : Plugin.Config.WindowAlpha;
-        
-        // Apply unfocused transparency (simplified)
-        if (!_isWindowFocused)
+        // OPTIMIZATION: Simplified alpha calculation - only recalculate when focus changes
+        var currentFocused = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
+        if (currentFocused != _isWindowFocused)
         {
-            var transparencyFactor = Plugin.Config.UnfocusedTransparency / 100f;
-            _cachedBgAlpha = (alpha / 100f) * transparencyFactor;
-        }
-        else
-        {
-            _cachedBgAlpha = alpha / 100f;
+            _isWindowFocused = currentFocused;
+            
+            var alpha = DMTab.IndependentOpacity ? DMTab.Opacity : Plugin.Config.WindowAlpha;
+            
+            if (!_isWindowFocused)
+            {
+                var transparencyFactor = Plugin.Config.UnfocusedTransparency / 100f;
+                _cachedBgAlpha = (alpha / 100f) * transparencyFactor;
+            }
+            else
+            {
+                _cachedBgAlpha = alpha / 100f;
+            }
         }
         
-        // OPTIMIZATION: Remove window entrance animation
         BgAlpha = _cachedBgAlpha;
     }
 
     public override void Draw()
     {
-        using var id = ImRaii.PushId($"dm-window-{Player.GetHashCode()}");
-
-        // Update focus state for transparency and mark as read when focused
-        _isWindowFocused = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
+        // PERFORMANCE: Start frame timing for performance monitoring
+        var frameStartTime = Environment.TickCount64;
         
-        // Apply transparency to UI elements based on focus state (OPTIMIZED: Only when needed)
-        var uiAlpha = _isWindowFocused ? 1.0f : (Plugin.Config.UnfocusedTransparency / 100f);
-        _currentUIAlpha = uiAlpha;
-        
-        // OPTIMIZATION: Only push color styles when transparency is actually needed
-        var needsTransparency = uiAlpha < 1.0f;
-        var colorScopes = new List<IDisposable>();
-        
-        if (needsTransparency)
-        {
-            // Only push the essential color styles to reduce overhead
-            colorScopes.Add(ImRaii.PushColor(ImGuiCol.Text, ImGui.GetColorU32(ImGuiCol.Text) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24)));
-            colorScopes.Add(ImRaii.PushColor(ImGuiCol.Button, ImGui.GetColorU32(ImGuiCol.Button) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24)));
-            colorScopes.Add(ImRaii.PushColor(ImGuiCol.FrameBg, ImGui.GetColorU32(ImGuiCol.FrameBg) & 0x00FFFFFF | ((uint)(255 * uiAlpha) << 24)));
-        }
-
         try
         {
-            // Calculate space for input area
-            var inputHeight = ImGui.GetFrameHeight() + ImGui.GetStyle().ItemSpacing.Y * 2;
-            var messageLogHeight = ImGui.GetContentRegionAvail().Y - inputHeight;
+            using var performanceScope = DMPerformanceProfiler.MeasureOperation($"DMWindow.Draw({Player.DisplayName})");
+            
+            // PERFORMANCE: Skip expensive ID push in minimal mode
+            using var id = Plugin.Config.UseMinimalDMWindows ? null : ImRaii.PushId($"dm-window-{Player.GetHashCode()}");
 
-            // Draw message log or empty state using optimized rendering
+            // PERFORMANCE: Handle async initialization to prevent stutter
+            if (_needsAsyncInitialization && !_isInitializing)
+            {
+                StartAsyncInitialization();
+            }
+
+            // OPTIMIZATION: Skip focus calculations only in broken aggressive mode (disabled)
+            // Always calculate focus properly to maintain functionality
+            var currentFocused = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
+            var focusChanged = currentFocused != _isWindowFocused;
+            if (focusChanged)
+            {
+                _isWindowFocused = currentFocused;
+            }
+            
+            // OPTIMIZATION: Only recalculate UI alpha when focus changes or transparency settings change
+            if (focusChanged)
+            {
+                _currentUIAlpha = _isWindowFocused ? 1.0f : (Plugin.Config.UnfocusedTransparency / 100f);
+            }
+            
+            // OPTIMIZATION: Skip transparency only when explicitly disabled
+            var needsTransparency = _currentUIAlpha < 1.0f;
+            var colorScopes = new List<IDisposable>();
+            
+            if (needsTransparency)
+            {
+                // Only push the essential color styles to reduce overhead
+                var alphaValue = (uint)(255 * _currentUIAlpha) << 24;
+                colorScopes.Add(ImRaii.PushColor(ImGuiCol.Text, ImGui.GetColorU32(ImGuiCol.Text) & 0x00FFFFFF | alphaValue));
+                colorScopes.Add(ImRaii.PushColor(ImGuiCol.Button, ImGui.GetColorU32(ImGuiCol.Button) & 0x00FFFFFF | alphaValue));
+                colorScopes.Add(ImRaii.PushColor(ImGuiCol.FrameBg, ImGui.GetColorU32(ImGuiCol.FrameBg) & 0x00FFFFFF | alphaValue));
+            }
+
             try
             {
-                // Use no timeout to avoid blocking - if messages aren't available immediately, show empty state
-                using var messages = DMTab.Messages.GetReadOnly(0); // No timeout - immediate return
-                if (messages.Count == 0)
-                {
-                    DrawEmptyState(messageLogHeight);
-                }
-                else
-                {
-                    // Use optimized message rendering
-                    DrawOptimizedMessageLog(messages, messageLogHeight);
-                }
-            }
-            catch (TimeoutException)
-            {
-                // If we can't get messages immediately, show empty state to avoid blocking
-                DrawEmptyState(messageLogHeight);
-            }
-            catch (Exception ex)
-            {
-                Plugin.Log.Error($"DMWindow.Draw: Error accessing messages: {ex.Message}");
-                DrawEmptyState(messageLogHeight);
-            }
+                // Calculate space for input area (always show input)
+                var inputHeight = ImGui.GetFrameHeight() + ImGui.GetStyle().ItemSpacing.Y * 2;
+                var messageLogHeight = ImGui.GetContentRegionAvail().Y - inputHeight;
 
-            // Draw DM-specific input area
-            DrawDMInputArea();
-            
-            if (_isWindowFocused)
-            {
-                LastActivityTime = FrameTime;
-                // Only mark as read every few frames to reduce overhead
-                if ((FrameTime % 100) == 0)
+                // OPTIMIZATION: Use immediate timeout to avoid blocking the UI thread
+                try
                 {
-                    History.MarkAsRead();
-                    DMTab.MarkAsRead();
+                    // Show loading state during async initialization
+                    if (!_initializationComplete)
+                    {
+                        DrawLoadingState(messageLogHeight);
+                    }
+                    else
+                    {
+                        using var messages = DMTab.Messages.GetReadOnly(0); // No timeout - immediate return
+                        if (messages.Count == 0)
+                        {
+                            DrawEmptyState(messageLogHeight);
+                        }
+                        else
+                        {
+                            // PERFORMANCE: Smart message rendering with caching
+                            var currentMessageCount = messages.Count;
+                            var shouldRender = ShouldRenderMessages(currentMessageCount);
+                            
+                            if (shouldRender)
+                            {
+                                using var renderScope = DMPerformanceProfiler.MeasureOperation("MessageRendering");
+                                DrawOptimizedMessageLog(messages, messageLogHeight);
+                                _lastRenderedMessageCount = currentMessageCount;
+                                _lastRenderTime = FrameTime;
+                                _renderCacheValid = true;
+                            }
+                            else
+                            {
+                                // Skip expensive message rendering, just maintain scroll position
+                                DrawCachedMessageArea(messageLogHeight);
+                            }
+                        }
+                    }
+                }
+                catch (TimeoutException)
+                {
+                    // If we can't get messages immediately, show appropriate state
+                    if (!_initializationComplete)
+                    {
+                        DrawLoadingState(messageLogHeight);
+                    }
+                    else
+                    {
+                        DrawEmptyState(messageLogHeight);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Plugin.Log.Error($"DMWindow.Draw: Error accessing messages: {ex.Message}");
+                    if (!_initializationComplete)
+                    {
+                        DrawLoadingState(messageLogHeight);
+                    }
+                    else
+                    {
+                        DrawEmptyState(messageLogHeight);
+                    }
+                }
+
+                // Draw DM-specific input area (always show)
+                using var inputScope = DMPerformanceProfiler.MeasureOperation("InputArea");
+                DrawDMInputArea();
+                
+                // OPTIMIZATION: Reduce activity tracking overhead
+                if (_isWindowFocused)
+                {
+                    LastActivityTime = FrameTime;
+                    // Only mark as read every 500ms to reduce overhead
+                    if ((FrameTime % 500) == 0)
+                    {
+                        History.MarkAsRead();
+                        DMTab.MarkAsRead();
+                    }
+                }
+                
+                // OPTIMIZATION: Only update window title occasionally to reduce string operations
+                if ((FrameTime % 1000) == 0) // Update title every second
+                {
+                    UpdateWindowTitle();
+                }
+            }
+            finally
+            {
+                // Dispose color scopes
+                foreach (var scope in colorScopes)
+                {
+                    scope.Dispose();
                 }
             }
         }
         finally
         {
-            // Dispose color scopes
-            foreach (var scope in colorScopes)
+            // PERFORMANCE: Record frame time for monitoring
+            var frameEndTime = Environment.TickCount64;
+            var frameTimeMs = frameEndTime - frameStartTime;
+            DMPerformanceProfiler.RecordFrameTime(frameTimeMs);
+            
+            // Log performance warnings if frame time is too high
+            if (Plugin.Config.EnableDMPerformanceLogging && frameTimeMs > 16.67) // Slower than 60 FPS
             {
-                scope.Dispose();
+                Plugin.Log.Warning($"DM Window slow frame: {frameTimeMs:F2}ms for {Player.DisplayName}");
             }
         }
     }
@@ -730,10 +1111,11 @@ internal class DMWindow : Window
 
     /// <summary>
     /// Internal method to draw the actual action buttons with hover animations.
+    /// OPTIMIZED: Reduced expensive time calculations.
     /// </summary>
     private void DrawActionButtonsInternal(Vector2 buttonSize)
     {
-        var time = (float)(FrameTime / 1000.0);
+        // OPTIMIZATION: Remove expensive time calculation since we simplified GetButtonAlpha
         
         // Invite to Party button with hover animation
         var inviteHovered = false;
@@ -799,6 +1181,7 @@ internal class DMWindow : Window
 
     /// <summary>
     /// Gets animated alpha for button hover effects.
+    /// OPTIMIZED: Simplified animation to reduce per-frame calculations.
     /// </summary>
     private float GetButtonAlpha(string buttonId, out bool isHovered)
     {
@@ -809,28 +1192,278 @@ internal class DMWindow : Window
             return 1f; // No animation when ModernUI is disabled
         }
         
-        // Smooth hover animation
+        // OPTIMIZATION: Simplified hover animation without expensive math operations
         var baseAlpha = 0.8f;
         var hoverAlpha = 1f;
-        var time = (float)(FrameTime / 1000.0);
         
         if (isHovered)
         {
-            // Animate to hover state
-            var pulse = (float)(Math.Sin(time * 4f) * 0.1f + 0.9f); // Subtle pulse
-            return Math.Min(hoverAlpha, baseAlpha + pulse);
+            // Simple linear interpolation instead of sine wave
+            return hoverAlpha;
         }
         
         return baseAlpha;
     }
 
     /// <summary>
-    /// Draws the message log using the same method as DM tabs for consistent color handling.
+    /// Determines if we should render messages this frame based on performance heuristics.
+    /// </summary>
+    private bool ShouldRenderMessages(int currentMessageCount)
+    {
+        // Always render if message count changed
+        if (currentMessageCount != _lastRenderedMessageCount)
+        {
+            _renderCacheValid = false;
+            return true;
+        }
+        
+        // Always render if cache is invalid
+        if (!_renderCacheValid)
+        {
+            return true;
+        }
+        
+        // Render at reduced frequency to maintain performance
+        var timeSinceLastRender = FrameTime - _lastRenderTime;
+        if (timeSinceLastRender >= RenderCacheInterval)
+        {
+            return true;
+        }
+        
+        // Skip rendering this frame
+        return false;
+    }
+
+    /// <summary>
+    /// Draws a cached message area that maintains scroll position without expensive rendering.
+    /// </summary>
+    private void DrawCachedMessageArea(float childHeight)
+    {
+        // Create a child window to maintain scroll state without expensive message rendering
+        using var child = ImRaii.Child("##cached-messages", new Vector2(-1, childHeight), false, ImGuiWindowFlags.NoBackground);
+        if (!child.Success)
+            return;
+            
+        // Just maintain the scroll area without rendering messages
+        // This keeps the scrollbar and interaction working while skipping expensive rendering
+        var messageCount = _lastRenderedMessageCount;
+        if (messageCount > 0)
+        {
+            // Estimate content height based on message count to maintain scroll behavior
+            var estimatedLineHeight = ImGui.GetTextLineHeightWithSpacing();
+            var estimatedContentHeight = messageCount * estimatedLineHeight * 1.5f; // Rough estimate
+            
+            // Create invisible dummy to maintain scroll area size
+            ImGui.Dummy(new Vector2(0, estimatedContentHeight));
+        }
+    }
+
+    /// <summary>
+    /// Draws the message log using optimized rendering with reduced frequency.
     /// </summary>
     private void DrawOptimizedMessageLog(IReadOnlyList<Message> messages, float childHeight)
     {
-        // Use the same DrawMessageLog method as DM tabs to ensure consistent color handling
-        ChatLogWindow.DrawMessageLog(DMTab, ChatLogWindow.PayloadHandler, childHeight, false);
+        // PERFORMANCE: Always use lightweight rendering - the ChatLogWindow.DrawMessageLog is the FPS killer
+        // The issue is that ChatLogWindow.DrawMessageLog is designed for single-window rendering (tabs)
+        // but when called from multiple DM windows, each window creates rendering overhead
+        
+        if (Plugin.Config.EnableDMPerformanceLogging)
+        {
+            using var renderScope = DMPerformanceProfiler.MeasureOperation("LightweightMessageLog");
+            DrawLightweightMessageLog(messages, childHeight);
+        }
+        else
+        {
+            DrawLightweightMessageLog(messages, childHeight);
+        }
+        
+        // DISABLED: This is the FPS killer - ChatLogWindow.DrawMessageLog from multiple windows
+        // if (!Plugin.Config.UseLightweightDMRendering)
+        // {
+        //     ChatLogWindow.DrawMessageLog(DMTab, ChatLogWindow.PayloadHandler, childHeight, false);
+        // }
+    }
+
+    /// <summary>
+    /// Lightweight message renderer inspired by XIVInstantMessenger's approach.
+    /// Uses display cap and virtual scrolling for better performance.
+    /// </summary>
+    private void DrawLightweightMessageLog(IReadOnlyList<Message> messages, float childHeight)
+    {
+        using var child = ImRaii.Child("##dm-messages-lightweight", new Vector2(-1, childHeight), false, ImGuiWindowFlags.NoBackground);
+        if (!child.Success)
+            return;
+
+        try
+        {
+            using var messagesReadOnly = DMTab.Messages.GetReadOnly(0); // Immediate timeout
+            
+            // PERFORMANCE: XIVInstantMessenger-inspired display cap system
+            // Only render the most recent N messages for performance
+            var displayCap = Math.Min(messagesReadOnly.Count, Plugin.Config.MaxLinesToRender);
+            var startIndex = Math.Max(0, messagesReadOnly.Count - displayCap);
+            
+            // Show performance warning if messages are hidden
+            if (startIndex > 0)
+            {
+                using (ImRaii.PushColor(ImGuiCol.Text, ImGui.GetColorU32(ImGuiCol.TextDisabled)))
+                {
+                    ImGui.TextWrapped($"For performance, {startIndex} older messages are hidden.");
+                }
+                
+                if (ImGui.Button($"Show {Math.Min(startIndex, 50)} more messages"))
+                {
+                    // Increase display cap temporarily
+                    displayCap = Math.Min(messagesReadOnly.Count, displayCap + 50);
+                    startIndex = Math.Max(0, messagesReadOnly.Count - displayCap);
+                }
+                ImGui.Separator();
+            }
+            
+            // PERFORMANCE: Always use standard lightweight rendering with virtual scrolling
+            DrawVirtualScrolledMessages(messagesReadOnly, startIndex, displayCap, childHeight);
+            
+            // Auto-scroll to bottom for new messages (XIVInstantMessenger style)
+            if (ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 1.0f)
+            {
+                ImGui.SetScrollHereY(1.0f);
+            }
+        }
+        catch (TimeoutException)
+        {
+            // If we can't get messages immediately, show placeholder
+            ImGui.TextDisabled("Loading messages...");
+        }
+    }
+
+    /// <summary>
+    /// Ultra-lightweight message rendering for aggressive performance mode.
+    /// Sacrifices features for maximum FPS.
+    /// </summary>
+    private void DrawUltraLightweightMessages(IReadOnlyList<Message> messages, int startIndex, int displayCap, float childHeight)
+    {
+        // EXTREME PERFORMANCE: Render only text, no colors, no formatting, no virtual scrolling
+        var lineHeight = ImGui.GetTextLineHeightWithSpacing();
+        
+        for (var i = startIndex; i < Math.Min(messages.Count, startIndex + displayCap); i++)
+        {
+            var message = messages[i];
+            
+            // Ultra-simple rendering: just timestamp and text
+            var timestamp = message.Date.ToString("HH:mm");
+            var isIncoming = message.Code.Type == ChatType.TellIncoming;
+            var sender = isIncoming ? Player.DisplayName : "You";
+            var content = string.Join("", message.Content.Select(chunk => chunk.StringValue()));
+            
+            // Single line with minimal formatting
+            ImGui.TextUnformatted($"[{timestamp}] {sender}: {content}");
+        }
+    }
+
+    /// <summary>
+    /// Standard virtual scrolled message rendering with XIVInstantMessenger optimizations.
+    /// </summary>
+    private void DrawVirtualScrolledMessages(IReadOnlyList<Message> messages, int startIndex, int displayCap, float childHeight)
+    {
+        // PERFORMANCE: Only render visible messages with optimized rendering
+        var lineHeight = ImGui.GetTextLineHeightWithSpacing();
+        var scrollY = ImGui.GetScrollY();
+        var visibleStart = Math.Max(startIndex, (int)(scrollY / lineHeight) - 2);
+        var visibleEnd = Math.Min(messages.Count, visibleStart + (int)(childHeight / lineHeight) + 4);
+        
+        // Add invisible spacer for messages before visible area
+        if (visibleStart > startIndex)
+        {
+            ImGui.Dummy(new Vector2(0, (visibleStart - startIndex) * lineHeight));
+        }
+        
+        // Render only visible messages with XIVInstantMessenger-style optimization
+        bool? lastIsIncoming = null;
+        for (var i = visibleStart; i < visibleEnd; i++)
+        {
+            if (i >= messages.Count) break;
+            
+            var message = messages[i];
+            DrawOptimizedMessage(message, ref lastIsIncoming);
+        }
+        
+        // Add invisible spacer for messages after visible area
+        var remainingMessages = messages.Count - visibleEnd;
+        if (remainingMessages > 0)
+        {
+            ImGui.Dummy(new Vector2(0, remainingMessages * lineHeight));
+        }
+    }
+
+    /// <summary>
+    /// Draws a single message with optimized rendering that mimics tab behavior.
+    /// This avoids the expensive ChatLogWindow.DrawMessageLog overhead.
+    /// </summary>
+    private void DrawOptimizedMessage(Message message, ref bool? lastIsIncoming)
+    {
+        try
+        {
+            var isIncoming = message.Code.Type == ChatType.TellIncoming;
+            var showSender = lastIsIncoming != isIncoming;
+            lastIsIncoming = isIncoming;
+            
+            // Show sender header when switching between incoming/outgoing (XIVInstantMessenger style)
+            if (showSender)
+            {
+                var senderText = isIncoming ? $"From {Player.DisplayName}" : "From You";
+                var senderColor = isIncoming ? Plugin.Config.DMIncomingColor : Plugin.Config.DMOutgoingColor;
+                
+                if (Plugin.Config.UseDMCustomColors)
+                {
+                    // Use custom colors if enabled
+                    ImGui.PushStyleColor(ImGuiCol.Text, senderColor);
+                    ImGui.TextUnformatted(senderText);
+                    ImGui.PopStyleColor();
+                }
+                else
+                {
+                    // Use default disabled text color
+                    ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetColorU32(ImGuiCol.TextDisabled));
+                    ImGui.TextUnformatted(senderText);
+                    ImGui.PopStyleColor();
+                }
+            }
+            
+            // Message content with indentation
+            ImGui.Dummy(new Vector2(20f, 0f)); // Indent messages
+            ImGui.SameLine();
+            
+            // Timestamp and message on same line
+            if (DMTab.DisplayTimestamp)
+            {
+                var timestamp = message.Date.ToString("HH:mm");
+                ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetColorU32(ImGuiCol.TextDisabled));
+                ImGui.TextUnformatted($"[{timestamp}] ");
+                ImGui.PopStyleColor();
+                ImGui.SameLine();
+            }
+            
+            // Message content with color - this is the key optimization
+            // Instead of using ChatLogWindow's complex payload rendering, use simple text
+            var contentText = string.Join("", message.Content.Select(chunk => chunk.StringValue()));
+            var messageColor = isIncoming ? Plugin.Config.DMIncomingColor : Plugin.Config.DMOutgoingColor;
+            
+            if (Plugin.Config.UseDMCustomColors)
+            {
+                ImGui.PushStyleColor(ImGuiCol.Text, messageColor);
+                ImGui.TextWrapped(contentText);
+                ImGui.PopStyleColor();
+            }
+            else
+            {
+                ImGui.TextWrapped(contentText);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Fallback for any rendering errors
+            ImGui.TextDisabled($"[Error rendering message: {ex.Message}]");
+        }
     }
 
 
@@ -1473,13 +2106,15 @@ internal class DMWindow : Window
 
     /// <summary>
     /// Checks if the player is already in the friend list (cached for performance).
-    /// OPTIMIZED: Reduced frequency and simplified logic.
+    /// OPTIMIZED: Increased cache interval and simplified logic to reduce overhead.
     /// </summary>
     /// <returns>True if the player is already a friend, false otherwise</returns>
     private bool IsPlayerAlreadyFriend()
     {
-        // OPTIMIZATION: Use longer cache interval to reduce overhead
-        if (FrameTime - _lastFriendCheck < FriendCheckInterval)
+        // OPTIMIZATION: Use much longer cache interval to reduce overhead (30 seconds)
+        const long ExtendedFriendCheckInterval = 30000; // 30 seconds
+        
+        if (FrameTime - _lastFriendCheck < ExtendedFriendCheckInterval)
         {
             return _cachedIsFriend;
         }
@@ -1501,9 +2136,9 @@ internal class DMWindow : Window
         }
         catch (Exception ex)
         {
-            Plugin.Log.Warning($"IsPlayerAlreadyFriend: Failed to check friend status for {Player.Name}: {ex.Message}");
-            _cachedIsFriend = false;
-            return false; // If we can't check, show the button to be safe
+            Plugin.Log.Warning($"IsPlayerAlreadyFriend: Failed to check friend status: {ex.Message}");
+            // Return cached value on error to avoid repeated failures
+            return _cachedIsFriend;
         }
     }
 
@@ -1565,17 +2200,48 @@ internal class DMWindow : Window
 
     public override void PostDraw()
     {
-        // PERSISTENCE: Update DM window state in configuration when position/size changes
-        try
+        // PERSISTENCE: Update DM window state in configuration ONLY when position/size changes
+        // PERFORMANCE: Only check position/size every 10 frames (6 times per second at 60 FPS)
+        var currentFrameTime = Environment.TickCount64;
+        var shouldCheckPositionSize = (currentFrameTime - _lastPositionSizeCheck) > 166; // ~6 times per second
+        
+        if (shouldCheckPositionSize)
         {
-            if (Position.HasValue && Size.HasValue)
+            _lastPositionSizeCheck = currentFrameTime;
+            
+            try
             {
-                DMManager.Instance.UpdateDMWindowState(Player, Position.Value, Size.Value);
+                if (Position.HasValue && Size.HasValue)
+                {
+                    // PERFORMANCE FIX: Only update when position or size actually changes
+                    var currentPosition = Position.Value;
+                    var currentSize = Size.Value;
+                    
+                    // Use larger threshold to avoid constant updates due to floating-point precision
+                    var positionThreshold = 2.0f; // Increased from 1f to 2f
+                    var sizeThreshold = 2.0f;     // Increased from 1f to 2f
+                    
+                    var positionChanged = _lastPosition == null || 
+                        Math.Abs(_lastPosition.Value.X - currentPosition.X) > positionThreshold || 
+                        Math.Abs(_lastPosition.Value.Y - currentPosition.Y) > positionThreshold;
+                        
+                    var sizeChanged = _lastSize == null || 
+                        Math.Abs(_lastSize.Value.X - currentSize.X) > sizeThreshold || 
+                        Math.Abs(_lastSize.Value.Y - currentSize.Y) > sizeThreshold;
+                    
+                    if (positionChanged || sizeChanged)
+                    {
+                        DMManager.Instance.UpdateDMWindowState(Player, currentPosition, currentSize);
+                        _lastPosition = currentPosition;
+                        _lastSize = currentSize;
+                        Plugin.Log.Debug($"PostDraw: Updated position/size for {Player.DisplayName} - Position: {currentPosition}, Size: {currentSize}");
+                    }
+                }
             }
-        }
-        catch (Exception ex)
-        {
-            Plugin.Log.Debug($"PostDraw: Failed to update DM window state: {ex.Message}");
+            catch (Exception ex)
+            {
+                Plugin.Log.Debug($"PostDraw: Failed to update DM window state: {ex.Message}");
+            }
         }
 
         // Pop custom font if it was pushed
@@ -1594,6 +2260,20 @@ internal class DMWindow : Window
 
     public override void OnClose()
     {
+        // PERFORMANCE: Cancel any ongoing async initialization
+        if (_initializationTask != null && !_initializationTask.IsCompleted)
+        {
+            try
+            {
+                // Don't wait for the task, just let it complete naturally
+                Plugin.Log.Debug($"OnClose: Async initialization task still running for {Player.DisplayName}, letting it complete naturally");
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.Warning($"OnClose: Exception while handling async task cleanup: {ex.Message}");
+            }
+        }
+
         // Decrement window count for cascading
         lock (WindowCountLock)
         {
