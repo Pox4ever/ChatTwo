@@ -1859,14 +1859,29 @@ internal class DMManager
         }
     }
 
+    // Throttling for CleanupStaleReferences to prevent spam and performance issues
+    private long _lastCleanupTime = 0;
+    private const long CleanupThrottleInterval = 5000; // Only cleanup every 5 seconds
+
     /// <summary>
     /// Cleans up stale references and ensures tracking is synchronized with actual state.
     /// This should be called after plugin reload or when there are state inconsistencies.
+    /// PERFORMANCE: Throttled to prevent spam when called from context menus.
     /// </summary>
     public void CleanupStaleReferences()
     {
         try
         {
+            var currentTime = Environment.TickCount64;
+            
+            // PERFORMANCE FIX: Throttle cleanup to prevent spam from context menus
+            if (currentTime - _lastCleanupTime < CleanupThrottleInterval)
+            {
+                // Skip cleanup if called too recently
+                return;
+            }
+            
+            _lastCleanupTime = currentTime;
             Plugin.Log.Debug("CleanupStaleReferences: Starting cleanup of stale DM references");
             
             // Clean up windows that are no longer open or registered
@@ -1910,6 +1925,8 @@ internal class DMManager
                 _plugin?.SaveConfig();
                 Plugin.Log.Info($"CleanupStaleReferences: Saved configuration after removing {orphanedDMTabs.Count} orphaned DM tabs");
             }
+            
+            Plugin.Log.Debug($"CleanupStaleReferences: Cleanup completed - removed {staleWindows.Count} stale windows, {staleTabs.Count} stale tabs, {orphanedDMTabs.Count} orphaned tabs");
         }
         catch (Exception ex)
         {
@@ -1935,6 +1952,27 @@ internal class DMManager
         {
             Plugin.Log.Error($"Failed to check for DM tabs: {ex.Message}");
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Forces immediate cleanup without throttling. Use only when necessary (e.g., plugin initialization).
+    /// </summary>
+    public void ForceCleanupStaleReferences()
+    {
+        try
+        {
+            Plugin.Log.Debug("ForceCleanupStaleReferences: Starting immediate cleanup of stale DM references");
+            
+            // Reset throttle timer to allow immediate cleanup
+            _lastCleanupTime = 0;
+            
+            // Call the regular cleanup method
+            CleanupStaleReferences();
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"Failed to force cleanup stale references: {ex.Message}");
         }
     }
 

@@ -231,6 +231,11 @@ internal class Configuration : IPluginConfiguration
     
     // DM Window Persistence Settings
     public List<DMWindowState> OpenDMWindows { get; set; } = new(); // Persisted DM windows that should be restored on plugin reload
+    
+    // DM Performance Settings
+    public bool EnableDMPerformanceLogging { get; set; } = false; // Whether to enable performance logging for DM windows
+    public bool UseLightweightDMRendering { get; set; } = false; // Whether to use lightweight rendering for better FPS (now always enabled)
+    public bool UseMinimalDMWindows { get; set; } = false; // Whether to use minimal window flags for maximum FPS
 
     internal void UpdateFrom(Configuration other, bool backToOriginal)
     {
@@ -403,6 +408,11 @@ internal class Configuration : IPluginConfiguration
         
         // DM Window Persistence Settings
         OpenDMWindows = other.OpenDMWindows?.Select(w => w.Clone()).ToList() ?? new();
+        
+        // DM Performance Settings
+        EnableDMPerformanceLogging = other.EnableDMPerformanceLogging;
+        UseLightweightDMRendering = other.UseLightweightDMRendering;
+        UseMinimalDMWindows = other.UseMinimalDMWindows;
     }
 }
 

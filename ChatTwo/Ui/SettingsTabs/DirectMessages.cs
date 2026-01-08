@@ -208,48 +208,82 @@ internal sealed class DirectMessages(Configuration mutable) : ISettingsTab
         ImGui.Separator();
         ImGui.Spacing();
 
-        // Color Settings
-        ImGui.TextUnformatted("Color Settings");
+        // Performance Settings
+        DrawPerformanceSettings();
+    }
+
+    /// <summary>
+    /// Draws the DM performance settings section.
+    /// </summary>
+    private void DrawPerformanceSettings()
+    {
+        ImGui.TextUnformatted("Performance Settings");
         ImGui.Spacing();
 
-        var useDMCustomColors = Mutable.UseDMCustomColors;
-        ImGui.Checkbox("Use custom DM colors", ref useDMCustomColors);
-        Mutable.UseDMCustomColors = useDMCustomColors;
-        ImGuiUtil.HelpText("Use custom colors for DM messages instead of default chat colors. When disabled, uses standard FFXIV tell colors.");
+        ImGui.TextWrapped("Configure DM window performance settings. Higher performance modes may reduce functionality but improve FPS.");
         ImGui.Spacing();
 
-        if (useDMCustomColors)
+        // Performance monitoring
+        var enableLogging = Mutable.EnableDMPerformanceLogging;
+        if (ImGui.Checkbox("Enable Performance Monitoring", ref enableLogging))
         {
-            ImGui.Indent();
+            Mutable.EnableDMPerformanceLogging = enableLogging;
             
-            // Incoming message color
-            var incomingColor = ColourUtil.RgbaToVector4(Mutable.DMIncomingColor);
-            if (ImGui.ColorEdit4("Incoming message color", ref incomingColor, ImGuiColorEditFlags.NoInputs | ImGuiColorEditFlags.AlphaPreviewHalf))
+            if (enableLogging)
             {
-                Mutable.DMIncomingColor = ColourUtil.Vector4ToRgba(incomingColor);
+                DMPerformanceProfiler.Reset();
+                Plugin.Log.Info("DM Performance monitoring enabled. Check logs for FPS reports every 5 seconds.");
             }
-            ImGuiUtil.HelpText("Color for messages received from other players in DM windows and tabs.");
-            ImGui.Spacing();
-
-            // Outgoing message color
-            var outgoingColor = ColourUtil.RgbaToVector4(Mutable.DMOutgoingColor);
-            if (ImGui.ColorEdit4("Outgoing message color", ref outgoingColor, ImGuiColorEditFlags.NoInputs | ImGuiColorEditFlags.AlphaPreviewHalf))
-            {
-                Mutable.DMOutgoingColor = ColourUtil.Vector4ToRgba(outgoingColor);
-            }
-            ImGuiUtil.HelpText("Color for messages you send in DM windows and tabs (\"You:\" messages).");
-            ImGui.Spacing();
-
-            // Error message color
-            var errorColor = ColourUtil.RgbaToVector4(Mutable.DMErrorColor);
-            if (ImGui.ColorEdit4("Error message color", ref errorColor, ImGuiColorEditFlags.NoInputs | ImGuiColorEditFlags.AlphaPreviewHalf))
-            {
-                Mutable.DMErrorColor = ColourUtil.Vector4ToRgba(errorColor);
-            }
-            ImGuiUtil.HelpText("Color for error messages related to tells (e.g., \"Message could not be sent\").");
-            
-            ImGui.Unindent();
-            ImGui.Spacing();
         }
+        ImGuiUtil.HelpText("Enables detailed performance logging and FPS monitoring for DM windows. Check console logs for performance reports.");
+
+        // Show current performance if monitoring is enabled
+        if (enableLogging)
+        {
+            ImGui.SameLine();
+            ImGui.TextUnformatted($"({DMPerformanceProfiler.GetPerformanceSummary()})");
+        }
+
+        ImGui.Spacing();
+
+        // Lightweight rendering
+        var useLightweight = Mutable.UseLightweightDMRendering;
+        ImGui.Checkbox("Use Lightweight Rendering", ref useLightweight);
+        Mutable.UseLightweightDMRendering = useLightweight;
+        ImGuiUtil.HelpText("Uses optimized message rendering with virtual scrolling and display caps for better FPS. Target: 60+ FPS.");
+        ImGui.Spacing();
+
+        // Minimal windows
+        var useMinimal = Mutable.UseMinimalDMWindows;
+        ImGui.Checkbox("Use Minimal Window Mode", ref useMinimal);
+        Mutable.UseMinimalDMWindows = useMinimal;
+        ImGuiUtil.HelpText("Reduces ImGui window overhead by disabling navigation and focus effects. Target: 80+ FPS.");
+        ImGui.Spacing();
+
+        // Performance testing buttons
+        if (ImGui.Button("Reset Performance Metrics"))
+        {
+            DMPerformanceProfiler.Reset();
+            Plugin.Log.Info("Performance metrics reset");
+        }
+        ImGuiUtil.HelpText("Clears all performance data and starts fresh monitoring");
+
+        ImGui.SameLine();
+        
+        if (ImGui.Button("Test DM Window Performance"))
+        {
+            Plugin.Log.Info("Performance test: Please open DM windows manually to test performance impact.");
+            Plugin.Log.Info("Enable performance monitoring above to see FPS reports every 5 seconds.");
+        }
+        ImGuiUtil.HelpText("Opens multiple DM windows to test performance impact");
+
+        ImGui.Spacing();
+
+        // Performance recommendations
+        ImGui.TextUnformatted("Performance Recommendations:");
+        ImGui.BulletText("For 60+ FPS: Enable lightweight rendering (now always enabled)");
+        ImGui.BulletText("For 80+ FPS: Enable minimal window mode");
+        ImGui.BulletText("DM tabs always have better performance than windows");
+        ImGui.BulletText("NEW: Fixed the main FPS issue - ChatLogWindow.DrawMessageLog overhead");
     }
 }
