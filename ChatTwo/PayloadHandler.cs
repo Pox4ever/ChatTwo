@@ -582,8 +582,8 @@ public sealed class PayloadHandler
 
         var world = player.World;
         if (chunk.Message?.Code.Type == ChatType.FreeCompanyLoginLogout)
-            if (Plugin.ObjectTable.LocalPlayer?.HomeWorld.IsValid == true)
-                world = Plugin.ObjectTable.LocalPlayer.HomeWorld;
+            if (Plugin.PlayerState.HomeWorld.IsValid)
+                world = Plugin.PlayerState.HomeWorld;
 
         var name = new List<Chunk> { new TextChunk(ChunkSource.None, null, player.PlayerName) };
         if (world.Value.IsPublic)
