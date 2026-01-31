@@ -73,6 +73,26 @@ jobs:
           Copy-Item "$foundPath\GlandeChatTwo.pdb" Artifact\
         }
         
+        # Copy all dependency DLLs that aren't provided by Dalamud
+        $dependencies = @(
+          "MessagePack.dll",
+          "MessagePack.Annotations.dll",
+          "Microsoft.Data.Sqlite.dll",
+          "SQLitePCLRaw.core.dll",
+          "SQLitePCLRaw.provider.e_sqlite3.dll",
+          "SQLitePCLRaw.batteries_v2.dll",
+          "Pidgin.dll",
+          "SixLabors.ImageSharp.dll",
+          "Watson.Lite.dll"
+        )
+        
+        foreach ($dep in $dependencies) {
+          if (Test-Path "$foundPath\$dep") {
+            Copy-Item "$foundPath\$dep" Artifact\
+            Write-Host "Copied dependency: $dep"
+          }
+        }
+        
         Write-Host "=== Artifact Contents ==="
         Get-ChildItem Artifact
         
