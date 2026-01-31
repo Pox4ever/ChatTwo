@@ -17,6 +17,7 @@
         <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.0" />
         <PackageReference Include="Pidgin" Version="3.3.0" />
         <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
+        <PackageReference Include="SQLitePCLRaw.core" Version="2.1.11" />
         <PackageReference Include="Watson.Lite" Version="6.3.9" />
     </ItemGroup>
 

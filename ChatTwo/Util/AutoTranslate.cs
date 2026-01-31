@@ -211,7 +211,7 @@ internal static class AutoTranslate
             foreach (var emoteName in EmoteCache.SortedCodeArray)
             {
                 // Create a fake auto-translate entry for emotes
-                var emoteEntry = new AutoTranslateEntry(0, 0, emoteName, new Dalamud.Game.Text.SeStringHandling.SeString());
+                var emoteEntry = new AutoTranslateEntry(0, 0, emoteName, string.Empty);
                 
                 if (emoteName.Equals(prefix, StringComparison.OrdinalIgnoreCase))
                     wholeMatches.Add(emoteEntry);

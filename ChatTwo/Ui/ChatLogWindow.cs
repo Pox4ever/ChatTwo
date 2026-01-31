@@ -2481,7 +2481,7 @@ public sealed class ChatLogWindow : Window
                 if (isEmote)
                 {
                     // Draw emote with image
-                    var emoteImage = EmoteCache.GetEmote(entry.String);
+                    var emoteImage = EmoteCache.GetEmote(entry.Text);
                     if (emoteImage != null)
                     {
                         // Create a selectable area that covers the whole row
@@ -2496,18 +2496,18 @@ public sealed class ChatLogWindow : Window
                         
                         ImGui.SameLine();
                         ImGui.SetCursorPosY(cursor.Y - ImGui.GetTextLineHeightWithSpacing() + (emoteSize.Y - ImGui.GetTextLineHeight()) / 2);
-                        ImGui.TextUnformatted(entry.String);
+                        ImGui.TextUnformatted(entry.Text);
                     }
                     else
                     {
                         // Fallback if emote image not available
-                        clicked = ImGui.Selectable($"{entry.String} (emote)##{entry.Group}/{entry.Row}", highlight) || selected == i;
+                        clicked = ImGui.Selectable($"{entry.Text} (emote)##{entry.Group}/{entry.Row}", highlight) || selected == i;
                     }
                 }
                 else
                 {
                     // Regular auto-translate entry
-                    clicked = ImGui.Selectable($"{entry.String}##{entry.Group}/{entry.Row}", highlight) || selected == i;
+                    clicked = ImGui.Selectable($"{entry.Text}##{entry.Group}/{entry.Row}", highlight) || selected == i;
                 }
                 
                 // Show keyboard shortcut for first 10 items
@@ -2533,7 +2533,7 @@ public sealed class ChatLogWindow : Window
                 if (isEmote)
                 {
                     // This is an emote - just insert the emote name directly
-                    replacement = entry.String;
+                    replacement = entry.Text;
                 }
                 else
                 {
