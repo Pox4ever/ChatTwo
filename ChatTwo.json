@@ -2,7 +2,7 @@
   "Author": "Infi, Anna, Pox4eveR",
   "Name": "Glande Chat2",
   "InternalName": "GlandeChatTwo",
-  "AssemblyVersion": "1.32.0.1",
+  "AssemblyVersion": "1.34.1.1",
   "Description": "Glande Chat2 is a complete rewrite of the in-game chat window as a plugin with advanced Direct Message functionality.\n\n**Core Features:**\n• Unlimited tabs with flexible filtering\n• RGB channel coloring and variable font sizes\n• Sidebar tabs and unread counts\n• Screenshot mode (obfuscate names)\n• Web interface for remote chat access\n\n**Enhanced Emote Features:**\n• BetterTTV + 7TV emote support\n• Customizable emote sizes (0.5x to 3.0x scaling)\n• Multiple streamer emote support\n• 7TV personal emotes from any Twitch streamer\n• Easy Twitch user ID lookup integration\n• Emote conflict resolution with priority system\n• Real-time emote size adjustment\n\n**Advanced Direct Message System (Pox):**\n• Dedicated DM tabs and windows for tell conversations (Pox)\n• Pop-out DM windows with native collapse/expand functionality (Pox)\n• Smart message routing with cross-world player support (Pox)\n• Persistent DM history that survives plugin reloads (Pox)\n• Intelligent focus management for main chat vs DM interfaces (Pox)\n• Custom DM color schemes and transparency settings (Pox)\n• Auto-open DM on new tells with configurable modes (Pox)\n• Friend integration with party invite and adventurer plate access (Pox)",
   "ApplicableVersion": "any",
   "RepoUrl": "https://github.com/pox4ever/ChatTwo",
