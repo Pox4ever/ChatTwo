@@ -18,24 +18,18 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v4
       
-    - name: Setup MSBuild
-      uses: microsoft/setup-msbuild@v1.1
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
       with:
-        vs-prerelease: true
-        
-    - name: Setup NuGet
-      uses: NuGet/setup-nuget@v1.0.5
+        dotnet-version: '10.0.x'
         
     - name: Download Dalamud Latest
       run: |
         Invoke-WebRequest -Uri https://goatcorp.github.io/dalamud-distrib/latest.zip -OutFile dalamud.zip
         Expand-Archive -Force dalamud.zip "$env:AppData\XIVLauncher\addon\Hooks\dev"
-        
-    - name: Restore NuGet Packages
-      run: nuget restore ChatTwo\ChatTwo.csproj
       
     - name: Build Plugin
-      run: msbuild ChatTwo\ChatTwo.csproj /p:Configuration=Release
+      run: dotnet build ChatTwo\ChatTwo.csproj -c Release
       
     - name: Extract Plugin Files
       run: |
@@ -45,11 +39,9 @@ jobs:
         
         # Look for built files in common locations
         $possiblePaths = @(
+          "ChatTwo\bin\Release\net10.0-windows",
           "ChatTwo\bin\Release",
-          "ChatTwo\bin\x64\Release", 
-          "ChatTwo\bin\Release\net8.0-windows",
-          "bin\Release",
-          "bin\x64\Release"
+          "ChatTwo\bin\x64\Release"
         )
         
         $foundPath = $null
