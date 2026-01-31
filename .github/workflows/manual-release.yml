@@ -54,25 +54,25 @@ jobs:
         
         $foundPath = $null
         foreach ($path in $possiblePaths) {
-          if (Test-Path "$path\ChatTwo.dll") {
+          if (Test-Path "$path\GlandeChatTwo.dll") {
             $foundPath = $path
-            Write-Host "Found ChatTwo.dll at: $foundPath"
+            Write-Host "Found GlandeChatTwo.dll at: $foundPath"
             break
           }
         }
         
         if (-not $foundPath) {
-          Write-Host "Searching for ChatTwo.dll in all locations..."
-          Get-ChildItem -Recurse -Name "ChatTwo.dll" | ForEach-Object { Write-Host "Found: $_" }
-          throw "Could not find ChatTwo.dll in any expected location"
+          Write-Host "Searching for GlandeChatTwo.dll in all locations..."
+          Get-ChildItem -Recurse -Name "GlandeChatTwo.dll" | ForEach-Object { Write-Host "Found: $_" }
+          throw "Could not find GlandeChatTwo.dll in any expected location"
         }
         
         # Create artifact directory and copy files
         New-Item -ItemType Directory -Force -Path Artifact
-        Copy-Item "$foundPath\ChatTwo.dll" Artifact\
-        Copy-Item "$foundPath\ChatTwo.json" Artifact\
-        if (Test-Path "$foundPath\ChatTwo.pdb") {
-          Copy-Item "$foundPath\ChatTwo.pdb" Artifact\
+        Copy-Item "$foundPath\GlandeChatTwo.dll" Artifact\
+        Copy-Item "$foundPath\GlandeChatTwo.json" Artifact\
+        if (Test-Path "$foundPath\GlandeChatTwo.pdb") {
+          Copy-Item "$foundPath\GlandeChatTwo.pdb" Artifact\
         }
         
         Write-Host "=== Artifact Contents ==="
