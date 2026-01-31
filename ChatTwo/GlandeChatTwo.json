@@ -1,0 +1,25 @@
+{
+  "Author": "Infi, Anna, Pox4eveR",
+  "Name": "Glande Chat2",
+  "InternalName": "GlandeChatTwo",
+  "AssemblyVersion": "1.34.1.1",
+  "Description": "Glande Chat2 is a complete rewrite of the in-game chat window as a plugin with advanced Direct Message functionality.\n\n**Core Features:**\n• Unlimited tabs with flexible filtering\n• RGB channel coloring and variable font sizes\n• Sidebar tabs and unread counts\n• Screenshot mode (obfuscate names)\n• Web interface for remote chat access\n\n**Enhanced Emote Features:**\n• BetterTTV + 7TV emote support\n• Customizable emote sizes (0.5x to 3.0x scaling)\n• Multiple streamer emote support\n• 7TV personal emotes from any Twitch streamer\n• Easy Twitch user ID lookup integration\n• Emote conflict resolution with priority system\n• Real-time emote size adjustment\n\n**Advanced Direct Message System (Pox):**\n• Dedicated DM tabs and windows for tell conversations (Pox)\n• Pop-out DM windows with native collapse/expand functionality (Pox)\n• Smart message routing with cross-world player support (Pox)\n• Persistent DM history that survives plugin reloads (Pox)\n• Intelligent focus management for main chat vs DM interfaces (Pox)\n• Custom DM color schemes and transparency settings (Pox)\n• Auto-open DM on new tells with configurable modes (Pox)\n• Friend integration with party invite and adventurer plate access (Pox)",
+  "ApplicableVersion": "any",
+  "RepoUrl": "https://github.com/pox4ever/ChatTwo",
+  "Tags": [
+    "Social",
+    "UI",
+    "Chat",
+    "Replacement",
+    "DirectMessages",
+    "Tells"
+  ],
+  "DalamudApiLevel": 14,
+  "LoadRequiredState": 0,
+  "LoadSync": false,
+  "CanUnloadAsync": false,
+  "LoadPriority": 0,
+  "Punchline": "Glande Chat2 - Enhanced chat with advanced Direct Message system and 7TV emotes",
+  "Changelog": "**Glande Chat2 - Advanced Direct Message System by Pox4eveR**\n\n**🚀 Revolutionary DM Features:**\n• DM Windows & Tabs: Dedicated interfaces for tell conversations with seamless switching (Pox)\n• Pop-out DM Windows: Native collapse/expand with action buttons (invite, friend, adventurer plate) (Pox)\n• Smart Message Routing: Intelligent tell routing with cross-world player support (Pox)\n• Message History: Persistent DM history that survives plugin reloads (Pox)\n• Focus Management: Smart focus behavior - main chat returns to game, DMs respect user preference (Pox)\n• World Detection: Accurate world information extraction from PlayerPayload data (Pox)\n• Auto-open DMs: Configurable auto-opening of DM interfaces on new tells (Pox)\n\n**🎨 Enhanced UI Features:**\n• DM Section Window: Integrated tell interface with collapse/expand functionality (Pox)\n• Custom Colors: Separate color schemes for incoming/outgoing DMs and errors (Pox)\n• Transparency Support: Focus-based transparency with performance optimizations (Pox)\n• Action Integration: Direct party invites, friend requests, and adventurer plate access (Pox)\n\n**🎉 Enhanced Emote Features:**\n• Full 7TV emote support alongside existing BetterTTV emotes\n• Load personal emotes from any Twitch streamer using their user ID\n• Easy Twitch user ID lookup with built-in browser integration\n• Support for multiple streamers (comma-separated user IDs)\n• Customizable emote sizing (0.5x to 3.0x scaling) with real-time adjustment\n• Automatic emote conflict resolution with priority system\n\n**📋 Core Chat Features:**\n• Web interface for remote chat access\n• Unlimited tabs with flexible filtering\n• RGB channel coloring and variable font sizes\n• Screenshot mode and unread counts\n\n*Enhanced by Pox4eveR - Bringing advanced Direct Message functionality and Twitch emotes to FFXIV!*",
+  "AcceptsFeedback": true
+}
