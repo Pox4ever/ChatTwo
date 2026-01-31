@@ -2809,8 +2809,8 @@ public sealed class ChatLogWindow : Window
         {
             if (chunk.Link is PlayerPayload playerPayload)
                 content = HidePlayerInString(content, playerPayload.PlayerName, playerPayload.World.RowId);
-            else if (Plugin.ObjectTable.LocalPlayer is { } player)
-                content = HidePlayerInString(content, player.Name.TextValue, player.HomeWorld.RowId);
+            else if (Plugin.PlayerState.IsLoaded)
+                content = HidePlayerInString(content, Plugin.PlayerState.CharacterName, Plugin.PlayerState.HomeWorld.RowId);
         }
 
         if (wrap)
